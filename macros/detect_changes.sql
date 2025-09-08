@@ -1,0 +1,86 @@
+{% macro detect_changes(pipe_exists, table_exists, schema_name, pipe_name, table_name, stage_name, cluster_key, cluster_key_transformation, use_individual_columns) %}
+    {# Initialize change tracking #}
+    {% set changes = {
+        'requires_action': false,
+        'create_table': false,
+        'create_pipe': false,
+        'recreate_table': false,
+        'recreate_pipe': false,
+        'reasons': []
+    } %}
+    
+    {# Check for initial creation #}
+    {% if not pipe_exists or not table_exists %}
+        {% if not table_exists %}
+            {% do changes.update({'create_table': true, 'requires_action': true}) %}
+            {% do changes.reasons.append("Table missing") %}
+        {% endif %}
+        {% if not pipe_exists %}
+            {% do changes.update({'create_pipe': true, 'requires_action': true}) %}
+            {% do changes.reasons.append("Pipe missing") %}
+        {% endif %}
+    {% else %}
+        {# Both exist - check for configuration changes #}
+        
+        {# 1. Stage Check #}
+        {% set current_stage = get_pipe_stage(schema_name, pipe_name) %}
+        {% set expected_stage = stage_name|upper %}
+        
+        {% if current_stage != expected_stage %}
+            {% do changes.update({'recreate_pipe': true, 'requires_action': true}) %}
+            {% do changes.reasons.append("Stage changed") %}
+        {% endif %}
+        
+        {# 2. Clustering Check #}
+        {% set current_cluster = get_table_cluster_key(schema_name, table_name) %}
+        {% set expected_cluster = ('LINEAR(' ~ cluster_key|upper ~ ')') if (cluster_key and cluster_key|trim != "") else '' %}
+        
+        {% if current_cluster != expected_cluster %}
+            {% do changes.update({'recreate_table': true, 'recreate_pipe': true, 'requires_action': true}) %}
+            {% do changes.reasons.append("Clustering changed") %}
+        {% endif %}
+        
+        {# 3. Table Structure Check #}
+        {% set has_data_column = check_column_exists(schema_name, table_name, 'DATA') %}
+        {% set metadata_prefix = var("snowpipe_metadata_prefix", "_METADATA") %}
+        {% set has_metadata_columns = check_column_exists(schema_name, table_name, metadata_prefix ~ '_FILE_PATH') %}
+        
+        {% if use_individual_columns and has_data_column and not has_metadata_columns %}
+            {% do changes.update({'recreate_table': true, 'recreate_pipe': true, 'requires_action': true}) %}
+            {% do changes.reasons.append("Converting to individual columns") %}
+        {% elif not use_individual_columns and not has_data_column %}
+            {% do changes.update({'recreate_table': true, 'recreate_pipe': true, 'requires_action': true}) %}
+            {% do changes.reasons.append("Converting to VARIANT") %}
+        {% endif %}
+        
+        {# 4. Cluster Transformation Check #}
+        {% if cluster_key and cluster_key|trim != "" and cluster_key_transformation and cluster_key_transformation|trim != "" %}
+            {% set current_transformation = get_pipe_cluster_transformation(schema_name, pipe_name, cluster_key) %}
+            
+            {% if current_transformation != cluster_key_transformation %}
+                {% do changes.update({'recreate_pipe': true, 'requires_action': true}) %}
+                {% do changes.reasons.append("Cluster transformation changed") %}
+            {% endif %}
+        {% endif %}
+        
+        {# 5. File Pattern Check #}
+        {% set current_pattern = get_pipe_file_pattern(schema_name, pipe_name) %}
+        {% set expected_pattern = get_file_pattern(file_pattern) %}
+        
+        {% if current_pattern != expected_pattern %}
+            {% do changes.update({'recreate_pipe': true, 'requires_action': true}) %}
+            {% do changes.reasons.append("File pattern changed") %}
+        {% endif %}
+        
+        {# 6. File Format Check #}
+        {% set current_file_format = get_pipe_file_format(schema_name, pipe_name) %}
+        {% set expected_file_format = get_file_format_name(file_pattern) %}
+        
+        {% if current_file_format != expected_file_format %}
+            {% do changes.update({'recreate_pipe': true, 'requires_action': true}) %}
+            {% do changes.reasons.append("File format changed") %}
+        {% endif %}
+    {% endif %}
+    
+    {{ return(changes) }}
+{% endmacro %}

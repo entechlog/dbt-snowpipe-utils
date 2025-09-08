@@ -1,0 +1,61 @@
+name: 'dbt_snowpipe_utils'
+version: '1.0.0'
+
+profile: 'dbt_snowpipe_utils'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  # =============================================================================
+  # DATABASE AND WAREHOUSE CONFIGURATION
+  # =============================================================================
+  snowpipe_database: "{{ env_var('SNOWPIPE_DATABASE', 'RAW_DB') }}"
+  snowpipe_schema: "{{ env_var('SNOWPIPE_SCHEMA', 'UTIL') }}"
+  snowpipe_warehouse: "{{ env_var('SNOWPIPE_WAREHOUSE', 'COMPUTE_WH') }}"
+  
+  # =============================================================================
+  # STAGE NAMES
+  # =============================================================================
+  snowpipe_json_stage: "{{ env_var('SNOWPIPE_JSON_STAGE', 'DATA_LAKE_SILVER_JSON_STG') }}"
+  snowpipe_parquet_stage: "{{ env_var('SNOWPIPE_PARQUET_STAGE', 'DATA_LAKE_SILVER_PARQUET_STG') }}"
+  snowpipe_csv_stage: "{{ env_var('SNOWPIPE_CSV_STAGE', 'DATA_LAKE_SILVER_CSV_STG') }}"
+  
+  # =============================================================================
+  # SNOWFLAKE CONFIGURATION
+  # =============================================================================
+  snowpipe_enable_error_integration: "{{ env_var('SNOWPIPE_ENABLE_ERROR_INTEGRATION', 'false') | as_bool }}"
+  snowpipe_error_integration: "{{ env_var('SNOWPIPE_ERROR_INTEGRATION', 'SNOWPIPE_ERROR_NOTIFICATION') }}"
+  
+  # =============================================================================
+  # ROLE CONFIGURATION
+  # =============================================================================
+  snowpipe_admin_role: "{{ env_var('SNOWPIPE_ADMIN_ROLE', 'SYSADMIN') }}"
+  snowpipe_monitor_roles: "{{ env_var('SNOWPIPE_MONITOR_ROLES', 'SYSADMIN') }}"
+  
+  # =============================================================================
+  # FILE FORMAT NAMES
+  # =============================================================================
+  snowpipe_json_file_format: "{{ env_var('SNOWPIPE_JSON_FORMAT', 'JSON_FORMAT') }}"
+  snowpipe_parquet_file_format: "{{ env_var('SNOWPIPE_PARQUET_FORMAT', 'PARQUET_FORMAT') }}"
+  snowpipe_csv_file_format: "{{ env_var('SNOWPIPE_CSV_FORMAT', 'CSV_FORMAT') }}"
+
+# =============================================================================
+# SEED CONFIGURATION
+# =============================================================================
+seeds:
+  dbt_snowpipe_utils:
+    reference__snowpipe_config:
+      +schema: "{{ env_var('SNOWPIPE_SEED_SCHEMA', 'seed') }}"
+
+models:
+  dbt_snowpipe_utils:
+    +materialized: view
