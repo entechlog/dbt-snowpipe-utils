@@ -107,6 +107,26 @@
     {% if not table_exists %}
         {% set requires_table_creation = true %}
         {% do change_reasons.append("Table missing") %}
+    {% else %}
+        {# Table exists - check if it has required metadata columns #}
+        {% set metadata_check_query %}
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+            AND TABLE_SCHEMA = UPPER('{{ source_name }}')
+            AND TABLE_NAME = UPPER('{{ table_name }}')
+            AND COLUMN_NAME IN ('FILE_NAME', 'FILE_ROW_NUMBER', 'FILE_CONTENT_KEY', 'FILE_LAST_MODIFIED_TIMESTAMP', 'LOADED_TIMESTAMP')
+        {% endset %}
+        {%- call statement('metadata_columns_check', fetch_result=True) %}{{ metadata_check_query }}{%- endcall -%}
+        {%- set metadata_result = load_result('metadata_columns_check')['data'] -%}
+        {% set metadata_columns_count = metadata_result[0][0] if metadata_result|length > 0 else 0 %}
+        
+        {% if metadata_columns_count < 5 %}
+            {% set requires_table_creation = true %}
+            {% do change_reasons.append("Missing metadata columns") %}
+            {% if debug_mode %}
+                {{ log("Table exists but missing metadata columns (" ~ metadata_columns_count ~ "/5 found)", info=True) }}
+            {% endif %}
+        {% endif %}
     {% endif %}
     
     {% if not pipe_exists %}
@@ -126,7 +146,13 @@
             {% do change_reasons.append("File pattern changed") %}
         {% endif %}
         
-        {# Check clustering changes #}
+        {# File format changes are now handled by stage introspection #}
+        {# Since we use stage-based detection, we skip format name comparison #}
+        {% if debug_mode %}
+            {{ log("Using stage-based format detection - skipping format name comparison", info=True) }}
+        {% endif %}
+        
+        {# Check clustering changes - IMPROVED LOGIC #}
         {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
         
         {% if debug_mode %}

@@ -44,11 +44,7 @@ vars:
 # =============================================================================
 # SEED CONFIGURATION
 # =============================================================================
-seeds:
-  dbt_snowpipe_utils:
-    reference__snowpipe_config:
-      +schema: "{{ env_var('SNOWPIPE_SEED_SCHEMA', 'seed') }}"
-
-models:
-  dbt_snowpipe_utils:
-    +materialized: view
+# seeds:
+#   dbt_snowpipe_utils:
+#     reference__snowpipe_config:
+#       +schema: "{{ env_var('SNOWPIPE_SEED_SCHEMA', 'seed') }}"
