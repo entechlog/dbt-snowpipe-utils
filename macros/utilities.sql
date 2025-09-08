@@ -219,14 +219,19 @@
     {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
     
     {% if has_inline_format %}
-        {# Use the stage's inline file format #}
-        {% set stage_format = get_stage_file_format(stage_name_only) %}
-        {{ return('FILE_FORMAT = (' ~ stage_format ~ ')') }}
+        {# For stages with inline format, use simple TYPE based on file_pattern #}
+        {% if file_pattern|lower == 'json' %}
+            {{ return('FILE_FORMAT = (TYPE = \'JSON\')') }}
+        {% elif file_pattern|lower == 'csv' %}
+            {{ return('FILE_FORMAT = (TYPE = \'CSV\')') }}
+        {% else %}
+            {{ return('FILE_FORMAT = (TYPE = \'PARQUET\')') }}
+        {% endif %}
     {% else %}
         {# Check if stage has a named format #}
         {% set stage_info = get_stage_file_format_info(stage_name_only) %}
         {% if stage_info.has_named_format %}
-            {# Use the stage's named format #}
+            {# Use the stages named format #}
             {{ return('FILE_FORMAT = (FORMAT_NAME = \'' ~ stage_info.format_name ~ '\')') }}
         {% else %}
             {# Use our default named file format #}
