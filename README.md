@@ -81,7 +81,20 @@ graph TD
 
 ## Quick Setup
 
-### 1. Environment Variables
+### 1. Install Package
+```yaml
+# packages.yml
+packages:
+  - git: "https://github.com/entechlog/dbt-snowpipe-utils"
+    revision: main
+```
+
+```bash
+dbt deps
+```
+
+### 2. Set the Variables
+#### Using Environment Variables
 ```bash
 # Required
 export SNOWPIPE_DATABASE="RAW_DB"
@@ -99,25 +112,29 @@ export SNOWPIPE_PARQUET_STAGE="PARQUET_STAGE"
 export SNOWPIPE_CSV_STAGE="CSV_STAGE"
 ```
 
-### 2. Install Package
-```yaml
-# packages.yml
-packages:
-  - git: "https://github.com/entechlog/dbt-snowpipe-utils"
-    revision: main
-```
+#### Using dbt Variables
 
 ```bash
-dbt deps
+vars:
+  dbt_snowpipe_utils:
+    snowpipe_database: 
+    snowpipe_schema: UTIL
+    snowpipe_warehouse: 
+    snowpipe_admin_role: 
+    snowpipe_monitor_roles: 
+    env_code: 
+    snowpipe_seed_schema: 
+    snowpipe_error_integration:
+    snowpipe_parquet_stage:
 ```
 
 ### 3. Configure Pipes
 Edit `seeds/reference__snowpipe_config.csv`:
 ```csv
 stage_name,source_name,event_name,event_type,cluster_key_transformation,cluster_key_type,cluster_key,file_pattern,enable_schema_inference,enable_schema_evolution,dev_enable_pipe_flag,dev_pause_pipe_flag,stg_enable_pipe_flag,stg_pause_pipe_flag,prd_enable_pipe_flag,prd_pause_pipe_flag,notes
-,TEST,SAMPLE_DATA,,DATE(timestamp),DATE,event_date,json,FALSE,FALSE,TRUE,TRUE,FALSE,FALSE,FALSE,FALSE,Test VARIANT mode
-,TEST,SAMPLE_DATA_V2,,DATE(timestamp),DATE,event_date,json,TRUE,FALSE,TRUE,FALSE,FALSE,FALSE,FALSE,FALSE,Test individual columns
-,TEST,SAMPLE_DATA_V3,,DATE(timestamp),DATE,event_date,json,TRUE,TRUE,TRUE,FALSE,FALSE,FALSE,FALSE,FALSE,Test with schema evolution
+PARQUET_STAGE,TEST,SAMPLE_DATA,,DATE(timestamp),DATE,event_date,json,FALSE,FALSE,TRUE,TRUE,FALSE,FALSE,FALSE,FALSE,Test VARIANT mode
+PARQUET_STAGE,TEST,SAMPLE_DATA_V2,,DATE(timestamp),DATE,event_date,json,TRUE,FALSE,TRUE,FALSE,FALSE,FALSE,FALSE,FALSE,Test individual columns
+PARQUET_STAGE,TEST,SAMPLE_DATA_V3,,DATE(timestamp),DATE,event_date,json,TRUE,TRUE,TRUE,FALSE,FALSE,FALSE,FALSE,FALSE,Test with schema evolution
 ```
 
 Load config:

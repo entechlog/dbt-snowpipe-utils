@@ -7,12 +7,16 @@
         {{ log("Performing initial data copy to: " ~ full_table_name, info=True) }}
     {% endif %}
     
+    {# Get the appropriate file format clause #}
+    {% set file_format_clause = get_file_format_clause(file_pattern, stage_name) %}
+    {% set file_pattern_regex = get_file_pattern(file_pattern) %}
+    
     {% if use_individual_columns %}
         -- Individual columns mode: Use MATCH_BY_COLUMN_NAME with proper metadata mapping
         COPY INTO {{ full_table_name }}
         FROM @{{ stage_name }}/{{ s3_dir_name }}
-        FILE_FORMAT = (FORMAT_NAME = '{{ get_file_format_name(file_pattern) }}')
-        PATTERN = '{{ get_file_pattern(file_pattern) }}'
+        {{ file_format_clause }}
+        PATTERN = '{{ file_pattern_regex }}'
         MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
         INCLUDE_METADATA = (
             FILE_NAME = METADATA$FILENAME,
@@ -37,8 +41,8 @@
                 {% endif %}
             FROM @{{ stage_name }}/{{ s3_dir_name }}
         )
-        FILE_FORMAT = (FORMAT_NAME = '{{ get_file_format_name(file_pattern) }}')
-        PATTERN = '{{ get_file_pattern(file_pattern) }}';
+        {{ file_format_clause }}
+        PATTERN = '{{ file_pattern_regex }}';
     {% endif %}
     
     {% if debug_mode %}

@@ -219,7 +219,7 @@
         
         {# Switch back to original role #}
         {% set restore_role_sql %}
-            USE ROLE {{ original_role }};
+            USE ROLE "{{ original_role }}";
         {% endset %}
         {% do run_query(restore_role_sql) %}
         {{ log("", info=True) }}

@@ -5,7 +5,7 @@
     {# Build fully qualified names #}
     {% set full_pipe_name = var("snowpipe_database") ~ "." ~ source_name ~ "." ~ pipe_name %}
     {% set full_table_name = var("snowpipe_database") ~ "." ~ source_name ~ "." ~ table_name %}
-    {% set file_format = get_file_format_name(file_pattern) %}
+    {% set file_format_clause = get_file_format_clause(file_pattern, stage_name) %}
     {% set file_pattern_regex = get_file_pattern(file_pattern) %}
     
     -- Drop existing pipe if it exists
@@ -23,7 +23,7 @@
     {% if use_individual_columns %}
     COPY INTO {{ full_table_name }}
     FROM @{{ stage_name }}/{{ s3_dir_name }}
-    FILE_FORMAT = (FORMAT_NAME = '{{ file_format }}')
+    {{ file_format_clause }}
     PATTERN = '{{ file_pattern_regex }}'
     MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
     INCLUDE_METADATA = (
@@ -48,7 +48,7 @@
             {% endif %}
         FROM @{{ stage_name }}/{{ s3_dir_name }}
     )
-    FILE_FORMAT = (FORMAT_NAME = '{{ file_format }}')
+    {{ file_format_clause }}
     PATTERN = '{{ file_pattern_regex }}';
     {% endif %}
     

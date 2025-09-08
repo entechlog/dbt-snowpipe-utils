@@ -120,6 +120,54 @@
 {% endmacro %}
 
 -- =============================================================================
+-- STAGE FILE FORMAT DETECTION UTILITIES
+-- =============================================================================
+{% macro get_stage_file_format(stage_name) %}
+    {% set query %}
+        SELECT 
+            CASE 
+                WHEN file_format_name IS NOT NULL AND file_format_name != '' THEN
+                    'FORMAT_NAME = ' || file_format_name
+                WHEN file_format_type IS NOT NULL AND file_format_type != '' THEN
+                    'TYPE = ' || file_format_type ||
+                    CASE 
+                        WHEN file_format_options IS NOT NULL AND file_format_options != '' THEN
+                            ' ' || file_format_options
+                        ELSE ''
+                    END
+                ELSE ''
+            END as file_format_clause
+        FROM INFORMATION_SCHEMA.STAGES
+        WHERE STAGE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+        AND STAGE_SCHEMA = UPPER('{{ var("snowpipe_schema") }}')
+        AND STAGE_NAME = UPPER('{{ stage_name }}');
+    {% endset %}
+    {%- call statement('stage_format_check', fetch_result=True) %}{{ query }}{%- endcall -%}
+    {%- set result = load_result('stage_format_check')['data'] -%}
+    {% set format_clause = result[0][0] if result|length > 0 and result[0][0] else '' %}
+    {{ return(format_clause) }}
+{% endmacro %}
+
+{% macro check_stage_has_inline_format(stage_name) %}
+    {% set query %}
+        SELECT 
+            CASE 
+                WHEN file_format_name IS NOT NULL AND file_format_name != '' THEN FALSE
+                WHEN file_format_type IS NOT NULL AND file_format_type != '' THEN TRUE
+                ELSE FALSE
+            END as has_inline_format
+        FROM INFORMATION_SCHEMA.STAGES
+        WHERE STAGE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+        AND STAGE_SCHEMA = UPPER('{{ var("snowpipe_schema") }}')
+        AND STAGE_NAME = UPPER('{{ stage_name }}');
+    {% endset %}
+    {%- call statement('inline_format_check', fetch_result=True) %}{{ query }}{%- endcall -%}
+    {%- set result = load_result('inline_format_check')['data'] -%}
+    {% set has_inline = result[0][0] if result|length > 0 else false %}
+    {{ return(has_inline) }}
+{% endmacro %}
+
+-- =============================================================================
 -- PATH AND FORMAT UTILITIES
 -- =============================================================================
 {% macro get_s3_dir_name(source_name, event_name, event_type) %}
@@ -146,6 +194,22 @@
     {% else %}
         {# If not fully qualified, prepend database.schema #}
         {{ return(var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ "." ~ format_name|upper) }}
+    {% endif %}
+{% endmacro %}
+
+{% macro get_file_format_clause(file_pattern, stage_name) %}
+    {# First check if the stage has an inline file format #}
+    {% set stage_name_only = stage_name.split('.')[-1] %}
+    {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
+    
+    {% if has_inline_format %}
+        {# Use the stages inline file format #}
+        {% set stage_format = get_stage_file_format(stage_name_only) %}
+        {{ return('FILE_FORMAT = (' ~ stage_format ~ ')') }}
+    {% else %}
+        {# Use named file format #}
+        {% set format_name = get_file_format_name(file_pattern) %}
+        {{ return('FILE_FORMAT = (FORMAT_NAME = \'' ~ format_name ~ '\')') }}
     {% endif %}
 {% endmacro %}
 

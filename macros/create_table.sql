@@ -33,16 +33,35 @@
                 {{ log("Creating new table with inferred schema + metadata", info=True) }}
             {% endif %}
             
-            CREATE TABLE {{ full_table_name }}
-            USING TEMPLATE (
-                SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
-                FROM TABLE(
-                    INFER_SCHEMA(
-                        LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
-                        FILE_FORMAT => '{{ get_file_format_name(file_pattern) }}'
+            {# Get the appropriate file format clause for schema inference #}
+            {% set stage_name_only = stage_name.split('.')[-1] %}
+            {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
+            
+            {% if has_inline_format %}
+                {% set stage_format = get_stage_file_format(stage_name_only) %}
+                CREATE TABLE {{ full_table_name }}
+                USING TEMPLATE (
+                    SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
+                    FROM TABLE(
+                        INFER_SCHEMA(
+                            LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
+                            FILE_FORMAT => '{{ stage_format }}'
+                        )
                     )
                 )
-            )
+            {% else %}
+                {% set format_name = get_file_format_name(file_pattern) %}
+                CREATE TABLE {{ full_table_name }}
+                USING TEMPLATE (
+                    SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
+                    FROM TABLE(
+                        INFER_SCHEMA(
+                            LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
+                            FILE_FORMAT => '{{ format_name }}'
+                        )
+                    )
+                )
+            {% endif %}
             {% if enable_schema_evolution %}
             ENABLE_SCHEMA_EVOLUTION = TRUE
             {% endif %};
