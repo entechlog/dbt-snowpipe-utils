@@ -120,51 +120,67 @@
 {% endmacro %}
 
 -- =============================================================================
--- STAGE FILE FORMAT DETECTION UTILITIES
+-- STAGE FILE FORMAT DETECTION UTILITIES (using DESC STAGE)
 -- =============================================================================
-{% macro get_stage_file_format(stage_name) %}
+{% macro get_stage_file_format_info(stage_name) %}
     {% set query %}
-        SELECT 
-            CASE 
-                WHEN file_format_name IS NOT NULL AND file_format_name != '' THEN
-                    'FORMAT_NAME = ' || file_format_name
-                WHEN file_format_type IS NOT NULL AND file_format_type != '' THEN
-                    'TYPE = ' || file_format_type ||
-                    CASE 
-                        WHEN file_format_options IS NOT NULL AND file_format_options != '' THEN
-                            ' ' || file_format_options
-                        ELSE ''
-                    END
-                ELSE ''
-            END as file_format_clause
-        FROM INFORMATION_SCHEMA.STAGES
-        WHERE STAGE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
-        AND STAGE_SCHEMA = UPPER('{{ var("snowpipe_schema") }}')
-        AND STAGE_NAME = UPPER('{{ stage_name }}');
+        DESC STAGE {{ var("snowpipe_database") }}.{{ var("snowpipe_schema") }}.{{ stage_name }};
     {% endset %}
-    {%- call statement('stage_format_check', fetch_result=True) %}{{ query }}{%- endcall -%}
-    {%- set result = load_result('stage_format_check')['data'] -%}
-    {% set format_clause = result[0][0] if result|length > 0 and result[0][0] else '' %}
-    {{ return(format_clause) }}
+    {%- call statement('stage_desc_check', fetch_result=True) %}{{ query }}{%- endcall -%}
+    {%- set result = load_result('stage_desc_check')['data'] -%}
+    
+    {% set stage_info = {'has_named_format': false, 'has_inline_format': false, 'format_name': '', 'inline_properties': {}} %}
+    
+    {% for row in result %}
+        {% set parent_property = row[0] %}
+        {% set property = row[1] %}
+        {% set property_value = row[3] %}
+        
+        {% if parent_property == 'STAGE_FILE_FORMAT' and property == 'FORMAT_NAME' and property_value and property_value|trim != '' %}
+            {% do stage_info.update({'has_named_format': true, 'format_name': property_value}) %}
+        {% elif parent_property == 'STAGE_FILE_FORMAT' and property in ['TYPE', 'COMPRESSION', 'NULL_IF', 'TRIM_SPACE', 'BINARY_AS_TEXT', 'REPLACE_INVALID_CHARACTERS', 'USE_LOGICAL_TYPE'] %}
+            {% do stage_info.update({'has_inline_format': true}) %}
+            {% do stage_info.inline_properties.update({property: property_value}) %}
+        {% endif %}
+    {% endfor %}
+    
+    {{ return(stage_info) }}
 {% endmacro %}
 
 {% macro check_stage_has_inline_format(stage_name) %}
-    {% set query %}
-        SELECT 
-            CASE 
-                WHEN file_format_name IS NOT NULL AND file_format_name != '' THEN FALSE
-                WHEN file_format_type IS NOT NULL AND file_format_type != '' THEN TRUE
-                ELSE FALSE
-            END as has_inline_format
-        FROM INFORMATION_SCHEMA.STAGES
-        WHERE STAGE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
-        AND STAGE_SCHEMA = UPPER('{{ var("snowpipe_schema") }}')
-        AND STAGE_NAME = UPPER('{{ stage_name }}');
-    {% endset %}
-    {%- call statement('inline_format_check', fetch_result=True) %}{{ query }}{%- endcall -%}
-    {%- set result = load_result('inline_format_check')['data'] -%}
-    {% set has_inline = result[0][0] if result|length > 0 else false %}
-    {{ return(has_inline) }}
+    {% set stage_info = get_stage_file_format_info(stage_name) %}
+    {{ return(stage_info.has_inline_format and not stage_info.has_named_format) }}
+{% endmacro %}
+
+{% macro get_stage_file_format(stage_name) %}
+    {% set stage_info = get_stage_file_format_info(stage_name) %}
+    
+    {% if stage_info.has_named_format %}
+        {{ return(stage_info.format_name) }}
+    {% elif stage_info.has_inline_format %}
+        {# Build inline format string from properties #}
+        {% set format_parts = [] %}
+        {% for prop, value in stage_info.inline_properties.items() %}
+            {% if prop == 'TYPE' %}
+                {% do format_parts.append('TYPE = ' ~ value) %}
+            {% elif prop == 'NULL_IF' and value %}
+                {% do format_parts.append('NULL_IF = ' ~ value) %}
+            {% elif prop == 'COMPRESSION' and value and value != 'AUTO' %}
+                {% do format_parts.append('COMPRESSION = ' ~ value) %}
+            {% elif prop == 'TRIM_SPACE' and value|string|lower == 'true' %}
+                {% do format_parts.append('TRIM_SPACE = TRUE') %}
+            {% elif prop == 'BINARY_AS_TEXT' and value|string|lower == 'true' %}
+                {% do format_parts.append('BINARY_AS_TEXT = TRUE') %}
+            {% elif prop == 'REPLACE_INVALID_CHARACTERS' and value|string|lower == 'true' %}
+                {% do format_parts.append('REPLACE_INVALID_CHARACTERS = TRUE') %}
+            {% elif prop == 'USE_LOGICAL_TYPE' and value|string|lower == 'true' %}
+                {% do format_parts.append('USE_LOGICAL_TYPE = TRUE') %}
+            {% endif %}
+        {% endfor %}
+        {{ return(format_parts | join(' ')) }}
+    {% else %}
+        {{ return('') }}
+    {% endif %}
 {% endmacro %}
 
 -- =============================================================================
@@ -198,18 +214,25 @@
 {% endmacro %}
 
 {% macro get_file_format_clause(file_pattern, stage_name) %}
-    {# First check if the stage has an inline file format #}
+    {# Extract just the stage name from fully qualified name #}
     {% set stage_name_only = stage_name.split('.')[-1] %}
     {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
     
     {% if has_inline_format %}
-        {# Use the stages inline file format #}
+        {# Use the stage's inline file format #}
         {% set stage_format = get_stage_file_format(stage_name_only) %}
         {{ return('FILE_FORMAT = (' ~ stage_format ~ ')') }}
     {% else %}
-        {# Use named file format #}
-        {% set format_name = get_file_format_name(file_pattern) %}
-        {{ return('FILE_FORMAT = (FORMAT_NAME = \'' ~ format_name ~ '\')') }}
+        {# Check if stage has a named format #}
+        {% set stage_info = get_stage_file_format_info(stage_name_only) %}
+        {% if stage_info.has_named_format %}
+            {# Use the stage's named format #}
+            {{ return('FILE_FORMAT = (FORMAT_NAME = \'' ~ stage_info.format_name ~ '\')') }}
+        {% else %}
+            {# Use our default named file format #}
+            {% set format_name = get_file_format_name(file_pattern) %}
+            {{ return('FILE_FORMAT = (FORMAT_NAME = \'' ~ format_name ~ '\')') }}
+        {% endif %}
     {% endif %}
 {% endmacro %}
 
