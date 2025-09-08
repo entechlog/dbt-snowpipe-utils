@@ -50,25 +50,43 @@
                     )
                 )
             {% else %}
-                {# Use default format based on pattern for schema inference #}
-                {% if file_pattern|lower == 'json' %}
-                    {% set format_clause = 'TYPE = JSON' %}
-                {% elif file_pattern|lower == 'csv' %}
-                    {% set format_clause = 'TYPE = CSV' %}
-                {% else %}
-                    {% set format_clause = 'TYPE = PARQUET' %}
-                {% endif %}
-                
-                CREATE TABLE {{ full_table_name }}
-                USING TEMPLATE (
-                    SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
-                    FROM TABLE(
-                        INFER_SCHEMA(
-                            LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
-                            FILE_FORMAT => '{{ format_clause }}'
+                {# Check if stage has a named format #}
+                {% set stage_info = get_stage_file_format_info(stage_name_only) %}
+                {% if stage_info.has_named_format %}
+                    CREATE TABLE {{ full_table_name }}
+                    USING TEMPLATE (
+                        SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
+                        FROM TABLE(
+                            INFER_SCHEMA(
+                                LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
+                                FILE_FORMAT => '{{ stage_info.format_name }}'
+                            )
                         )
                     )
-                )
+                {% else %}
+                    {# Create default named file formats for inference if they don't exist #}
+                    {% if file_pattern|lower == 'json' %}
+                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_JSON_FORMAT" %}
+                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'JSON';
+                    {% elif file_pattern|lower == 'csv' %}
+                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_CSV_FORMAT" %}
+                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1;
+                    {% else %}
+                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_PARQUET_FORMAT" %}
+                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'PARQUET';
+                    {% endif %}
+                    
+                    CREATE TABLE {{ full_table_name }}
+                    USING TEMPLATE (
+                        SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
+                        FROM TABLE(
+                            INFER_SCHEMA(
+                                LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
+                                FILE_FORMAT => '{{ default_format_name }}'
+                            )
+                        )
+                    )
+                {% endif %}
             {% endif %}
             {% if enable_schema_evolution %}
             ENABLE_SCHEMA_EVOLUTION = TRUE
