@@ -23,12 +23,8 @@
     {% if use_individual_columns %}
     COPY INTO {{ full_table_name }}
     FROM @{{ stage_name }}/{{ s3_dir_name }}
-    {% if file_format_clause.startswith('FILE_FORMAT = (FORMAT_NAME') %}
     {{ file_format_clause }}
     PATTERN = '{{ file_pattern_regex }}'
-    {% else %}
-    ({{ file_format_clause.replace('FILE_FORMAT = ', '') }}, PATTERN => '{{ file_pattern_regex }}')
-    {% endif %}
     MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
     INCLUDE_METADATA = (
         FILE_NAME = METADATA$FILENAME,
@@ -52,12 +48,8 @@
             {% endif %}
         FROM @{{ stage_name }}/{{ s3_dir_name }}
     )
-    {% if file_format_clause.startswith('FILE_FORMAT = (FORMAT_NAME') %}
     {{ file_format_clause }}
     PATTERN = '{{ file_pattern_regex }}';
-    {% else %}
-    ({{ file_format_clause.replace('FILE_FORMAT = ', '') }}, PATTERN => '{{ file_pattern_regex }}');
-    {% endif %}
     {% endif %}
     
     
