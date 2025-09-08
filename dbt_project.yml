@@ -40,13 +40,6 @@ vars:
   # =============================================================================
   snowpipe_admin_role: "{{ env_var('SNOWPIPE_ADMIN_ROLE', 'SYSADMIN') }}"
   snowpipe_monitor_roles: "{{ env_var('SNOWPIPE_MONITOR_ROLES', 'SYSADMIN') }}"
-  
-  # =============================================================================
-  # FILE FORMAT NAMES
-  # =============================================================================
-  snowpipe_json_file_format: "{{ env_var('SNOWPIPE_JSON_FORMAT', 'JSON_FORMAT') }}"
-  snowpipe_parquet_file_format: "{{ env_var('SNOWPIPE_PARQUET_FORMAT', 'PARQUET_FORMAT') }}"
-  snowpipe_csv_file_format: "{{ env_var('SNOWPIPE_CSV_FORMAT', 'CSV_FORMAT') }}"
 
 # =============================================================================
 # SEED CONFIGURATION

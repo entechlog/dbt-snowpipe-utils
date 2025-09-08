@@ -77,7 +77,7 @@
         
         {# Stages Existence Check #}
         {{ log("", info=True) }}
-        {{ log("🏗️  STAGE EXISTENCE VALIDATION", info=True) }}
+        {{ log("🗄️ STAGE EXISTENCE VALIDATION", info=True) }}
         {{ log("┌─────────────────────────────────┬──────────────────┬──────────────────┐", info=True) }}
         {{ log("│ Stage Name                      │ Type             │ Status           │", info=True) }}
         {{ log("├─────────────────────────────────┼──────────────────┼──────────────────┤", info=True) }}
@@ -108,44 +108,10 @@
             {{ log("│ " ~ padded_name ~ " │ " ~ padded_type ~ " │ " ~ padded_status ~ " │", info=True) }}
         {% endfor %}
         {{ log("└─────────────────────────────────┴──────────────────┴──────────────────┘", info=True) }}
-        
-        {# File Formats Existence Check #}
-        {{ log("", info=True) }}
-        {{ log("📄 FILE FORMAT VALIDATION", info=True) }}
-        {{ log("┌─────────────────────────────────┬──────────────────┬──────────────────┐", info=True) }}
-        {{ log("│ Format Name                     │ Type             │ Status           │", info=True) }}
-        {{ log("├─────────────────────────────────┼──────────────────┼──────────────────┤", info=True) }}
-        
-        {% set formats_to_check = [
-            ('JSON', var("snowpipe_json_file_format")),
-            ('CSV', var("snowpipe_csv_file_format")),
-            ('PARQUET', var("snowpipe_parquet_file_format"))
-        ] %}
-        
-        {% for format_type, format_name in formats_to_check %}
-            {% set format_check_query %}
-                SELECT COUNT(*) as format_count
-                FROM INFORMATION_SCHEMA.FILE_FORMATS
-                WHERE FILE_FORMAT_CATALOG = UPPER('{{ var("snowpipe_database") }}')
-                AND FILE_FORMAT_SCHEMA = UPPER('{{ var("snowpipe_schema") }}')
-                AND FILE_FORMAT_NAME = UPPER('{{ format_name }}')
-            {% endset %}
-            
-            {%- call statement('format_existence_' ~ format_type, fetch_result=True) %}{{ format_check_query }}{%- endcall -%}
-            {%- set format_result = load_result('format_existence_' ~ format_type)['data'] -%}
-            {% set format_exists = (format_result[0][0] > 0) if format_result|length > 0 else false %}
-            {% set status_icon = "✅ EXISTS" if format_exists else "❌ MISSING" %}
-            
-            {% set padded_name = (format_name ~ ' ' * 31)[:31] %}
-            {% set padded_type = (format_type ~ ' ' * 16)[:16] %}
-            {% set padded_status = (status_icon ~ ' ' * 16)[:16] %}
-            {{ log("│ " ~ padded_name ~ " │ " ~ padded_type ~ " │ " ~ padded_status ~ " │", info=True) }}
-        {% endfor %}
-        {{ log("└─────────────────────────────────┴──────────────────┴──────────────────┘", info=True) }}
-        
+                
         {# Configuration Table Check #}
         {{ log("", info=True) }}
-        {{ log("⚙️  CONFIGURATION VALIDATION", info=True) }}
+        {{ log("⚙️ CONFIGURATION VALIDATION", info=True) }}
         {% set config_table_name = var("snowpipe_database") ~ "." ~ var("snowpipe_seed_schema", "seed") ~ ".reference__snowpipe_config" %}
         
         {% set config_check_query %}
@@ -195,16 +161,37 @@
         {{ log("├─────────────────────────────────┼──────────────────────────────────────┤", info=True) }}
         
         {% for pattern in ['json', 'csv', 'parquet'] %}
-            {% set format_name = get_file_format_name(pattern) %}
+            {% set stage_name = var("snowpipe_" ~ pattern ~ "_stage") %}
+            
+            {# Check if stage exists before trying to describe it #}
+            {% set stage_check_query %}
+                SELECT COUNT(*) as stage_count
+                FROM INFORMATION_SCHEMA.STAGES
+                WHERE STAGE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+                AND STAGE_SCHEMA = UPPER('{{ var("snowpipe_schema") }}')
+                AND STAGE_NAME = UPPER('{{ stage_name }}')
+            {% endset %}
+            
+            {%- call statement('format_resolution_stage_check_' ~ pattern, fetch_result=True) %}{{ stage_check_query }}{%- endcall -%}
+            {%- set stage_result = load_result('format_resolution_stage_check_' ~ pattern)['data'] -%}
+            {% set stage_exists = (stage_result[0][0] > 0) if stage_result|length > 0 else false %}
+            
+            {% if stage_exists %}
+                {% set format_clause = get_file_format_clause(pattern, stage_name) %}
+                {% set format_display = "Stage-based: " ~ format_clause.split('=')[1]|trim|replace('(', '')|replace(')', '')|replace("'", '') %}
+            {% else %}
+                {% set format_display = "❌ Stage missing - cannot resolve" %}
+            {% endif %}
+            
             {% set padded_pattern = (pattern ~ ' ' * 31)[:31] %}
-            {% set padded_format = (format_name ~ ' ' * 36)[:36] %}
+            {% set padded_format = (format_display ~ ' ' * 36)[:36] %}
             {{ log("│ " ~ padded_pattern ~ " │ " ~ padded_format ~ " │", info=True) }}
         {% endfor %}
         {{ log("└─────────────────────────────────┴──────────────────────────────────────┘", info=True) }}
         
         {# Environment Detection #}
         {{ log("", info=True) }}
-        {{ log("🌍 ENVIRONMENT DETECTION", info=True) }}
+        {{ log("🌐 ENVIRONMENT DETECTION", info=True) }}
         {% set env_info = get_environment_name() %}
         {{ log("┌─────────────────────────────────┬──────────────────────────────────────┐", info=True) }}
         {{ log("│ Environment Property            │ Value                                │", info=True) }}

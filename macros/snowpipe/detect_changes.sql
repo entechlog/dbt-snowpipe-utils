@@ -1,4 +1,4 @@
-{% macro detect_changes(pipe_exists, table_exists, schema_name, pipe_name, table_name, stage_name, cluster_key, cluster_key_transformation, use_individual_columns) %}
+{% macro detect_changes(pipe_exists, table_exists, schema_name, pipe_name, table_name, stage_name, cluster_key, cluster_key_transformation, use_individual_columns, file_pattern) %}
     {# Initialize change tracking #}
     {% set changes = {
         'requires_action': false,
@@ -33,7 +33,7 @@
         
         {# 2. Clustering Check #}
         {% set current_cluster = get_table_cluster_key(schema_name, table_name) %}
-        {% set expected_cluster = ('LINEAR(' ~ cluster_key|upper ~ ')') if (cluster_key and cluster_key|trim != "") else '' %}
+        {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
         
         {% if current_cluster != expected_cluster %}
             {% do changes.update({'recreate_table': true, 'recreate_pipe': true, 'requires_action': true}) %}
@@ -72,14 +72,6 @@
             {% do changes.reasons.append("File pattern changed") %}
         {% endif %}
         
-        {# 6. File Format Check #}
-        {% set current_file_format = get_pipe_file_format(schema_name, pipe_name) %}
-        {% set expected_file_format = get_file_format_name(file_pattern) %}
-        
-        {% if current_file_format != expected_file_format %}
-            {% do changes.update({'recreate_pipe': true, 'requires_action': true}) %}
-            {% do changes.reasons.append("File format changed") %}
-        {% endif %}
     {% endif %}
     
     {{ return(changes) }}

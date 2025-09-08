@@ -195,27 +195,33 @@
     {{ return(s3_dir|lower) }}
 {% endmacro %}
 
-{% macro get_file_format_name(file_pattern) %}
-    {% if file_pattern|lower == 'json' %}
-        {% set format_name = var("snowpipe_json_file_format") %}
-    {% elif file_pattern|lower == 'csv' %}
-        {% set format_name = var("snowpipe_csv_file_format") %}
-    {% else %}
-        {% set format_name = var("snowpipe_parquet_file_format") %}
-    {% endif %}
-    
-    {# Return fully qualified format name #}
-    {% if '.' in format_name %}
-        {{ return(format_name|upper) }}
-    {% else %}
-        {# If not fully qualified, prepend database.schema #}
-        {{ return(var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ "." ~ format_name|upper) }}
-    {% endif %}
-{% endmacro %}
-
 {% macro get_file_format_clause(file_pattern, stage_name) %}
     {# Extract just the stage name from fully qualified name #}
     {% set stage_name_only = stage_name.split('.')[-1] %}
+    
+    {# Check if stage exists before trying to describe it #}
+    {% set stage_check_query %}
+        SELECT COUNT(*) as stage_count
+        FROM INFORMATION_SCHEMA.STAGES
+        WHERE STAGE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+        AND STAGE_SCHEMA = UPPER('{{ var("snowpipe_schema") }}')
+        AND STAGE_NAME = UPPER('{{ stage_name_only }}')
+    {% endset %}
+    {%- call statement('stage_existence_check_' ~ stage_name_only, fetch_result=True) %}{{ stage_check_query }}{%- endcall -%}
+    {%- set stage_result = load_result('stage_existence_check_' ~ stage_name_only)['data'] -%}
+    {% set stage_exists = (stage_result[0][0] > 0) if stage_result|length > 0 else false %}
+    
+    {% if not stage_exists %}
+        {# Stage doesn't exist, use default format based on pattern #}
+        {% if file_pattern|lower == 'json' %}
+            {{ return('FILE_FORMAT = (TYPE = \'JSON\')') }}
+        {% elif file_pattern|lower == 'csv' %}
+            {{ return('FILE_FORMAT = (TYPE = \'CSV\')') }}
+        {% else %}
+            {{ return('FILE_FORMAT = (TYPE = \'PARQUET\')') }}
+        {% endif %}
+    {% endif %}
+    
     {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
     
     {% if has_inline_format %}
@@ -231,12 +237,17 @@
         {# Check if stage has a named format #}
         {% set stage_info = get_stage_file_format_info(stage_name_only) %}
         {% if stage_info.has_named_format %}
-            {# Use the stages named format #}
+            {# Use the stage's named format #}
             {{ return('FILE_FORMAT = (FORMAT_NAME = \'' ~ stage_info.format_name ~ '\')') }}
         {% else %}
-            {# Use our default named file format #}
-            {% set format_name = get_file_format_name(file_pattern) %}
-            {{ return('FILE_FORMAT = (FORMAT_NAME = \'' ~ format_name ~ '\')') }}
+            {# Use default format based on pattern #}
+            {% if file_pattern|lower == 'json' %}
+                {{ return('FILE_FORMAT = (TYPE = \'JSON\')') }}
+            {% elif file_pattern|lower == 'csv' %}
+                {{ return('FILE_FORMAT = (TYPE = \'CSV\')') }}
+            {% else %}
+                {{ return('FILE_FORMAT = (TYPE = \'PARQUET\')') }}
+            {% endif %}
         {% endif %}
     {% endif %}
 {% endmacro %}
@@ -318,8 +329,8 @@
         {% set roles_list = roles_string.split(',') %}
         {% for role in roles_list %}
             {% set role_name = role.strip() %}
-            GRANT MONITOR ON PIPE {{ pipe_name }} TO ROLE {{ role_name }};
-            GRANT SELECT ON TABLE {{ table_name }} TO ROLE {{ role_name }};
+            GRANT MONITOR ON PIPE {{ pipe_name }} TO ROLE "{{ role_name }}";
+            GRANT SELECT ON TABLE {{ table_name }} TO ROLE "{{ role_name }}";
         {% endfor %}
     {% endif %}
     

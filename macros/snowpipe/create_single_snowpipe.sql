@@ -126,26 +126,7 @@
             {% do change_reasons.append("File pattern changed") %}
         {% endif %}
         
-        {# Updated file format checking logic to handle inline formats #}
-        {% set stage_name_only = stage_name %}
-        {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
-        
-        {% if has_inline_format %}
-            {# For stages with inline formats, we need a different comparison approach #}
-            {# Since inline formats are harder to extract exactly, we will be more permissive #}
-            {% if debug_mode %}
-                {{ log("Stage " ~ stage_name_only ~ " uses inline file format", info=True) }}
-            {% endif %}
-        {% else %}
-            {# Use named file format comparison as before #}
-            {% set expected_file_format = get_file_format_name(file_pattern) %}
-            {% if current_format != expected_file_format %}
-                {% set requires_pipe_recreation = true %}
-                {% do change_reasons.append("File format changed") %}
-            {% endif %}
-        {% endif %}
-        
-        {# Check clustering changes - IMPROVED LOGIC #}
+        {# Check clustering changes #}
         {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
         
         {% if debug_mode %}

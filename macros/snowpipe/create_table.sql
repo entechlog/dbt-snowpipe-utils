@@ -50,14 +50,22 @@
                     )
                 )
             {% else %}
-                {% set format_name = get_file_format_name(file_pattern) %}
+                {# Use default format based on pattern for schema inference #}
+                {% if file_pattern|lower == 'json' %}
+                    {% set format_clause = 'TYPE = JSON' %}
+                {% elif file_pattern|lower == 'csv' %}
+                    {% set format_clause = 'TYPE = CSV' %}
+                {% else %}
+                    {% set format_clause = 'TYPE = PARQUET' %}
+                {% endif %}
+                
                 CREATE TABLE {{ full_table_name }}
                 USING TEMPLATE (
                     SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
                     FROM TABLE(
                         INFER_SCHEMA(
                             LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
-                            FILE_FORMAT => '{{ format_name }}'
+                            FILE_FORMAT => '{{ format_clause }}'
                         )
                     )
                 )
@@ -93,8 +101,19 @@
             {%- call statement('metadata_check', fetch_result=True) %}{{ metadata_check_query }}{%- endcall -%}
             {%- set has_metadata = load_result('metadata_check')['data'][0][0] > 0 -%}
             
-            {% if not has_metadata %}
-                -- Add metadata columns
+            {# ALWAYS add metadata columns for individual columns mode, regardless of has_metadata check #}
+            {% if use_individual_columns %}
+                -- Add metadata columns for individual columns mode
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_NAME VARCHAR(16777216);
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_ROW_NUMBER NUMBER(38,0);
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_CONTENT_KEY VARCHAR(16777216);
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9);
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS LOADED_TIMESTAMP TIMESTAMP_NTZ(9);
+                {% if cluster_key and cluster_key|trim != "" %}
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }};
+                {% endif %}
+            {% elif not has_metadata %}
+                -- Add metadata columns for VARIANT mode only if they don't exist
                 ALTER TABLE {{ full_table_name }} ADD COLUMN FILE_NAME VARCHAR(16777216);
                 ALTER TABLE {{ full_table_name }} ADD COLUMN FILE_ROW_NUMBER NUMBER(38,0);
                 ALTER TABLE {{ full_table_name }} ADD COLUMN FILE_CONTENT_KEY VARCHAR(16777216);
