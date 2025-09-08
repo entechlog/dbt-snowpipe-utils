@@ -2,6 +2,83 @@
 
 Automated Snowflake Snowpipe management with schema inference and evolution support.
 
+
+## Architecture
+```mermaid 
+graph TD
+    %% External Data Sources
+    S3[S3/Azure/GCS Storage<br/>PROMETHEUS/*.parquet<br/>SYSTEM_LOGS/*.json<br/>OTHER/*.csv] 
+    
+    %% Snowflake Layer
+    subgraph SF [Snowflake Environment]
+        direction TB
+        subgraph STAGES [External Stages]
+            ST1[Stage_1]
+            ST2[Stage_2]
+            STN[Stage_N]
+        end
+        
+        subgraph PIPES [Snowpipes - Auto Ingest]
+            SP1[Snowpipe_1]
+            SP2[Snowpipe_2]
+            SPN[Snowpipe_N]
+        end
+        
+        subgraph TABLES [Raw Tables]
+            RT1[raw_table_1<br/>+ cluster key]
+            RT2[raw_table_2<br/>+ cluster key]
+            RTN[raw_table_N<br/>+ cluster key]
+        end
+    end
+    
+    %% dbt Package Layer
+    subgraph DBT [dbt Package Layer]
+        direction TB
+        
+        subgraph CONFIG [Configuration]
+            CONF[reference__snowpipe_config<br/>• stage_name<br/>• source_name, event_name<br/>• file_pattern<br/>• schema_inference/evolution<br/>• cluster_key config]
+            ENV[get_environment_name<br/>• Detect environment<br/>• Return env code]
+        end
+        
+        subgraph PROCESSING [Processing Macros]
+            MAIN[create_snowpipes<br/>Main Orchestrator<br/>• Query configuration<br/>• Loop through configs<br/>• Track status & report]
+            SINGLE[create_single_snowpipe<br/>Worker Macro<br/>• Create raw table<br/>• Create snowpipe<br/>• Apply cluster keys<br/>• Handle errors]
+        end
+    end
+    
+    %% Data Flow
+    S3 -->|File Events| ST1
+    S3 -->|File Events| ST2
+    S3 -->|File Events| STN
+    
+    ST1 --> SP1
+    ST2 --> SP2
+    STN --> SPN
+    
+    SP1 --> RT1
+    SP2 --> RT2
+    SPN --> RTN
+    
+    %% dbt Control Flow
+    CONF --> MAIN
+    ENV --> MAIN
+    MAIN --> SINGLE
+    SINGLE -->|Creates & Manages| STAGES
+    SINGLE -->|Creates & Manages| PIPES
+    SINGLE -->|Creates & Manages| TABLES
+    
+    %% Styling
+    classDef external fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef snowflake fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef dbt fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef config fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    
+    class S3 external
+    class ST1,ST2,STN,SP1,SP2,SPN,RT1,RT2,RTN snowflake
+    class MAIN,SINGLE dbt
+    class CONF,ENV config
+```
+
 ## Quick Setup
 
 ### 1. Environment Variables
