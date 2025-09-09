@@ -25,9 +25,9 @@ vars:
   # =============================================================================
   # STAGE NAMES
   # =============================================================================
-  snowpipe_json_stage: "{{ env_var('SNOWPIPE_JSON_STAGE', 'DATA_LAKE_SILVER_JSON_STG') }}"
-  snowpipe_parquet_stage: "{{ env_var('SNOWPIPE_PARQUET_STAGE', 'DATA_LAKE_SILVER_PARQUET_STG') }}"
-  snowpipe_csv_stage: "{{ env_var('SNOWPIPE_CSV_STAGE', 'DATA_LAKE_SILVER_CSV_STG') }}"
+  snowpipe_json_stage: "{{ env_var('SNOWPIPE_JSON_STAGE', 'JSON_STAGE') }}"
+  snowpipe_parquet_stage: "{{ env_var('SNOWPIPE_PARQUET_STAGE', 'PARQUET_STAGE') }}"
+  snowpipe_csv_stage: "{{ env_var('SNOWPIPE_CSV_STAGE', 'CSV_STAGE') }}"
   
   # =============================================================================
   # SNOWFLAKE CONFIGURATION
@@ -40,11 +40,3 @@ vars:
   # =============================================================================
   snowpipe_admin_role: "{{ env_var('SNOWPIPE_ADMIN_ROLE', 'SYSADMIN') }}"
   snowpipe_monitor_roles: "{{ env_var('SNOWPIPE_MONITOR_ROLES', 'SYSADMIN') }}"
-
-# =============================================================================
-# SEED CONFIGURATION
-# =============================================================================
-# seeds:
-#   dbt_snowpipe_utils:
-#     reference__snowpipe_config:
-#       +schema: "{{ env_var('SNOWPIPE_SEED_SCHEMA', 'seed') }}"
