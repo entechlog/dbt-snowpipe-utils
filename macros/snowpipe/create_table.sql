@@ -33,16 +33,61 @@
                 {{ log("Creating new table with inferred schema + metadata", info=True) }}
             {% endif %}
             
-            CREATE TABLE {{ full_table_name }}
-            USING TEMPLATE (
-                SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
-                FROM TABLE(
-                    INFER_SCHEMA(
-                        LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
-                        FILE_FORMAT => '{{ get_file_format_name(file_pattern) }}'
+            {# Get the appropriate file format clause for schema inference #}
+            {% set stage_name_only = stage_name.split('.')[-1] %}
+            {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
+            
+            {% if has_inline_format %}
+                {% set stage_format = get_stage_file_format(stage_name_only) %}
+                CREATE TABLE {{ full_table_name }}
+                USING TEMPLATE (
+                    SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
+                    FROM TABLE(
+                        INFER_SCHEMA(
+                            LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
+                            FILE_FORMAT => '{{ stage_format }}'
+                        )
                     )
                 )
-            )
+            {% else %}
+                {# Check if stage has a named format #}
+                {% set stage_info = get_stage_file_format_info(stage_name_only) %}
+                {% if stage_info.has_named_format %}
+                    CREATE TABLE {{ full_table_name }}
+                    USING TEMPLATE (
+                        SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
+                        FROM TABLE(
+                            INFER_SCHEMA(
+                                LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
+                                FILE_FORMAT => '{{ stage_info.format_name }}'
+                            )
+                        )
+                    )
+                {% else %}
+                    {# Create default named file formats for inference if they don't exist #}
+                    {% if file_pattern|lower == 'json' %}
+                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_JSON_FORMAT" %}
+                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'JSON';
+                    {% elif file_pattern|lower == 'csv' %}
+                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_CSV_FORMAT" %}
+                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1;
+                    {% else %}
+                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_PARQUET_FORMAT" %}
+                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'PARQUET';
+                    {% endif %}
+                    
+                    CREATE TABLE {{ full_table_name }}
+                    USING TEMPLATE (
+                        SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
+                        FROM TABLE(
+                            INFER_SCHEMA(
+                                LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
+                                FILE_FORMAT => '{{ default_format_name }}'
+                            )
+                        )
+                    )
+                {% endif %}
+            {% endif %}
             {% if enable_schema_evolution %}
             ENABLE_SCHEMA_EVOLUTION = TRUE
             {% endif %};
@@ -74,8 +119,19 @@
             {%- call statement('metadata_check', fetch_result=True) %}{{ metadata_check_query }}{%- endcall -%}
             {%- set has_metadata = load_result('metadata_check')['data'][0][0] > 0 -%}
             
-            {% if not has_metadata %}
-                -- Add metadata columns
+            {# ALWAYS add metadata columns for individual columns mode, regardless of has_metadata check #}
+            {% if use_individual_columns %}
+                -- Add metadata columns for individual columns mode
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_NAME VARCHAR(16777216);
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_ROW_NUMBER NUMBER(38,0);
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_CONTENT_KEY VARCHAR(16777216);
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9);
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS LOADED_TIMESTAMP TIMESTAMP_NTZ(9);
+                {% if cluster_key and cluster_key|trim != "" %}
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }};
+                {% endif %}
+            {% elif not has_metadata %}
+                -- Add metadata columns for VARIANT mode only if they don't exist
                 ALTER TABLE {{ full_table_name }} ADD COLUMN FILE_NAME VARCHAR(16777216);
                 ALTER TABLE {{ full_table_name }} ADD COLUMN FILE_ROW_NUMBER NUMBER(38,0);
                 ALTER TABLE {{ full_table_name }} ADD COLUMN FILE_CONTENT_KEY VARCHAR(16777216);

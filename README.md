@@ -2,32 +2,84 @@
 
 Automated Snowflake Snowpipe management with schema inference and evolution support.
 
+## Prerequisites
+
+This package manages Snowpipe creation and configuration but requires the following infrastructure to be created outside its scope:
+
+### Required Snowflake Objects
+- **Database**: Target database for tables and pipes
+- **Schemas**: Source schemas and utility schema for stages/formats
+- **Warehouse**: Compute warehouse for operations
+- **Roles**: Admin role with PIPE creation privileges and monitor roles
+- **External Stages**: Configured with storage integration and file formats
+- **Storage Integration**: For cloud storage access (S3/Azure/GCS)
+- **Error Integration**: SNS/SQS integration for error notifications (optional)
+
+### Example Data Layout
+The package expects data files to follow this partitioning structure in your cloud storage:
+```
+bucket/
+├── source=sales/
+│   ├── event_name=orders/
+│   │   ├── event_type=daily/
+│   │   │   ├── file1.parquet
+│   │   │   └── file2.parquet
+│   │   └── event_type=monthly/
+│   │       ├── file1.parquet
+│   │       └── file2.parquet
+│   └── event_name=customers/
+│       ├── file1.json
+│       └── file2.json
+└── source=marketing/
+    └── event_name=campaigns/
+        ├── file1.csv
+        └── file2.csv
+```
+
+**Snowflake Object Mapping:**
+- `source=sales` → Uses existing schema `RAW_DB.SALES` (schema must exist)
+- `event_name=orders` + `event_type=daily` → Creates table `ORDERS_DAILY`
+- `event_name=customers` (no event_type) → Creates table `CUSTOMERS`
+
+**Key Requirements:**
+- Path format: `source={source_name}/event_name={event_name}/[event_type={event_type}/]`
+- All three path components (`source`, `event_name`, `event_type`) are mandatory in the directory structure
+- `event_type` subdirectory is optional but must be included if specified in configuration
+- File patterns must match configured types (`.json`, `.parquet`, `.csv`)
+- The `source` value must match an existing schema name in your RAW database
+- The `event_name` + `event_type` (if present) combination becomes the table name in Snowflake
+- **Important**: This package only creates tables and pipes - schemas must be created beforehand
 
 ## Architecture
 ```mermaid 
 graph TD
     %% External Data Sources
-    S3[S3/Azure/GCS Storage<br/>PROMETHEUS/*.parquet<br/>SYSTEM_LOGS/*.json<br/>OTHER/*.csv] 
+    S3[S3/Azure/GCS Storage<br/>source=sales/event_name=orders/<br/>source=marketing/event_name=campaigns/<br/>*.parquet, *.json, *.csv] 
     
     %% Snowflake Layer
-    subgraph SF [Snowflake Environment]
+    subgraph SF [Snowflake Environment - Pre-existing Infrastructure]
         direction TB
-        subgraph STAGES [External Stages]
-            ST1[Stage_1]
-            ST2[Stage_2]
-            STN[Stage_N]
+        subgraph STAGES [External Stages - Must Exist]
+            ST1[JSON_STAGE]
+            ST2[PARQUET_STAGE]
+            ST3[CSV_STAGE]
         end
         
-        subgraph PIPES [Snowpipes - Auto Ingest]
-            SP1[Snowpipe_1]
-            SP2[Snowpipe_2]
-            SPN[Snowpipe_N]
+        subgraph SCHEMAS [Schemas - Must Exist]
+            SC1[SALES Schema]
+            SC2[MARKETING Schema]
         end
         
-        subgraph TABLES [Raw Tables]
-            RT1[raw_table_1<br/>+ cluster key]
-            RT2[raw_table_2<br/>+ cluster key]
-            RTN[raw_table_N<br/>+ cluster key]
+        subgraph PIPES [Snowpipes - Created by Package]
+            SP1[ORDERS_DAILY_PIPE]
+            SP2[CAMPAIGNS_PIPE]
+            SPN[...]
+        end
+        
+        subgraph TABLES [Raw Tables - Created by Package]
+            RT1[ORDERS_DAILY<br/>+ metadata columns<br/>+ cluster key]
+            RT2[CAMPAIGNS<br/>+ metadata columns<br/>+ cluster key]
+            RTN[...]
         end
     end
     
@@ -49,39 +101,52 @@ graph TD
     %% Data Flow
     S3 -->|File Events| ST1
     S3 -->|File Events| ST2
-    S3 -->|File Events| STN
+    S3 -->|File Events| ST3
     
     ST1 --> SP1
-    ST2 --> SP2
-    STN --> SPN
+    ST2 --> SP1
+    ST3 --> SP2
     
     SP1 --> RT1
     SP2 --> RT2
-    SPN --> RTN
     
     %% dbt Control Flow
     CONF --> MAIN
     ENV --> MAIN
     MAIN --> SINGLE
-    SINGLE -->|Creates & Manages| STAGES
-    SINGLE -->|Creates & Manages| PIPES
-    SINGLE -->|Creates & Manages| TABLES
+    SINGLE -->|Creates Only| PIPES
+    SINGLE -->|Creates Only| TABLES
     
     %% Styling
     classDef external fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef snowflake fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef preexisting fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef created fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
     classDef dbt fill:#fff3e0,stroke:#e65100,stroke-width:2px
     classDef config fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
     
     class S3 external
-    class ST1,ST2,STN,SP1,SP2,SPN,RT1,RT2,RTN snowflake
+    class ST1,ST2,ST3,SC1,SC2 preexisting
+    class SP1,SP2,SPN,RT1,RT2,RTN created
     class MAIN,SINGLE dbt
     class CONF,ENV config
 ```
 
 ## Quick Setup
 
-### 1. Environment Variables
+### 1. Install Package
+```yaml
+# packages.yml
+packages:
+  - git: "https://github.com/entechlog/dbt-snowpipe-utils"
+    revision: main
+```
+
+```bash
+dbt deps
+```
+
+### 2. Set the Variables
+#### Using Environment Variables
 ```bash
 # Required
 export SNOWPIPE_DATABASE="RAW_DB"
@@ -99,25 +164,29 @@ export SNOWPIPE_PARQUET_STAGE="PARQUET_STAGE"
 export SNOWPIPE_CSV_STAGE="CSV_STAGE"
 ```
 
-### 2. Install Package
-```yaml
-# packages.yml
-packages:
-  - git: "https://github.com/entechlog/dbt-snowpipe-utils"
-    revision: main
-```
+#### Using dbt Variables
 
 ```bash
-dbt deps
+vars:
+  dbt_snowpipe_utils:
+    snowpipe_database: 
+    snowpipe_schema: UTIL
+    snowpipe_warehouse: 
+    snowpipe_admin_role: 
+    snowpipe_monitor_roles: 
+    env_code: 
+    snowpipe_seed_schema: 
+    snowpipe_error_integration:
+    snowpipe_parquet_stage:
 ```
 
 ### 3. Configure Pipes
 Edit `seeds/reference__snowpipe_config.csv`:
 ```csv
 stage_name,source_name,event_name,event_type,cluster_key_transformation,cluster_key_type,cluster_key,file_pattern,enable_schema_inference,enable_schema_evolution,dev_enable_pipe_flag,dev_pause_pipe_flag,stg_enable_pipe_flag,stg_pause_pipe_flag,prd_enable_pipe_flag,prd_pause_pipe_flag,notes
-,TEST,SAMPLE_DATA,,DATE(timestamp),DATE,event_date,json,FALSE,FALSE,TRUE,TRUE,FALSE,FALSE,FALSE,FALSE,Test VARIANT mode
-,TEST,SAMPLE_DATA_V2,,DATE(timestamp),DATE,event_date,json,TRUE,FALSE,TRUE,FALSE,FALSE,FALSE,FALSE,FALSE,Test individual columns
-,TEST,SAMPLE_DATA_V3,,DATE(timestamp),DATE,event_date,json,TRUE,TRUE,TRUE,FALSE,FALSE,FALSE,FALSE,FALSE,Test with schema evolution
+PARQUET_STAGE,TEST,SAMPLE_DATA,,DATE(timestamp),DATE,event_date,json,FALSE,FALSE,TRUE,TRUE,FALSE,FALSE,FALSE,FALSE,Test VARIANT mode
+PARQUET_STAGE,TEST,SAMPLE_DATA_V2,,DATE(timestamp),DATE,event_date,json,TRUE,FALSE,TRUE,FALSE,FALSE,FALSE,FALSE,FALSE,Test individual columns
+PARQUET_STAGE,TEST,SAMPLE_DATA_V3,,DATE(timestamp),DATE,event_date,json,TRUE,TRUE,TRUE,FALSE,FALSE,FALSE,FALSE,FALSE,Test with schema evolution
 ```
 
 Load config:
