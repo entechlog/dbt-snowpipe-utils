@@ -103,9 +103,16 @@
     {% set requires_pipe_recreation = false %}
     {% set requires_table_creation = false %}
     {% set change_reasons = [] %}
+    {% set stage_change_flag = false %}
+    {% set cluster_change_flag = false %}
+    {% set cluster_transformation_change_flag = false %}
+    {% set file_pattern_change_flag = false %}
+    {% set file_format_change_flag = false %}
+    {% set table_change_flag = false %}
     
     {% if not table_exists %}
         {% set requires_table_creation = true %}
+        {% set table_change_flag = true %}
         {% do change_reasons.append("Table missing") %}
     {% else %}
         {# Table exists - check if it has required metadata columns #}
@@ -122,6 +129,7 @@
         
         {% if metadata_columns_count < 5 %}
             {% set requires_table_creation = true %}
+            {% set table_change_flag = true %}
             {% do change_reasons.append("Missing metadata columns") %}
             {% if debug_mode %}
                 {{ log("Table exists but missing metadata columns (" ~ metadata_columns_count ~ "/5 found)", info=True) }}
@@ -137,22 +145,35 @@
         {% set expected_stage = full_stage_name|upper %}
         {% if current_stage != expected_stage %}
             {% set requires_pipe_recreation = true %}
+            {% set stage_change_flag = true %}
             {% do change_reasons.append("Stage changed") %}
+            {% if debug_mode %}
+                {{ log("Stage change detected: '" ~ current_stage ~ "' -> '" ~ expected_stage ~ "'", info=True) }}
+            {% endif %}
         {% endif %}
         
         {% set expected_pattern = get_file_pattern(file_pattern) %}
         {% if current_pattern != expected_pattern %}
             {% set requires_pipe_recreation = true %}
+            {% set file_pattern_change_flag = true %}
             {% do change_reasons.append("File pattern changed") %}
+            {% if debug_mode %}
+                {{ log("File pattern change detected: '" ~ current_pattern ~ "' -> '" ~ expected_pattern ~ "'", info=True) }}
+            {% endif %}
         {% endif %}
         
-        {# File format changes are now handled by stage introspection #}
-        {# Since we use stage-based detection, we skip format name comparison #}
-        {% if debug_mode %}
-            {{ log("Using stage-based format detection - skipping format name comparison", info=True) }}
+        {# File format changes detection #}
+        {% set expected_format = get_file_format_clause(file_pattern, stage_name) %}
+        {% if current_format and current_format != expected_format %}
+            {% set requires_pipe_recreation = true %}
+            {% set file_format_change_flag = true %}
+            {% do change_reasons.append("File format changed") %}
+            {% if debug_mode %}
+                {{ log("File format change detected: '" ~ current_format ~ "' -> '" ~ expected_format ~ "'", info=True) }}
+            {% endif %}
         {% endif %}
         
-        {# Check clustering changes - IMPROVED LOGIC #}
+        {# Check clustering changes #}
         {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
         
         {% if debug_mode %}
@@ -164,11 +185,37 @@
         
         {% if current_cluster|trim|upper != expected_cluster|trim|upper %}
             {% set requires_table_creation = true %}
+            {% set cluster_change_flag = true %}
             {% do change_reasons.append("Clustering changed") %}
             {% if debug_mode %}
                 {{ log("Clustering change detected - will recreate table", info=True) }}
             {% endif %}
         {% endif %}
+        
+        {# Check cluster transformation changes #}
+        {% if cluster_key and cluster_key|trim != "" and cluster_key_transformation and cluster_key_transformation|trim != "" %}
+            {% set current_transformation = get_pipe_cluster_transformation(source_name, pipe_name, cluster_key) %}
+            {% if current_transformation != cluster_key_transformation %}
+                {% set requires_pipe_recreation = true %}
+                {% set cluster_transformation_change_flag = true %}
+                {% do change_reasons.append("Cluster transformation changed") %}
+                {% if debug_mode %}
+                    {{ log("Cluster transformation change detected: '" ~ current_transformation ~ "' -> '" ~ cluster_key_transformation ~ "'", info=True) }}
+                {% endif %}
+            {% endif %}
+        {% endif %}
+    {% endif %}
+    
+    {# Log all detected changes #}
+    {% if debug_mode %}
+        {{ log("Change Detection Summary:", info=True) }}
+        {{ log("  stage_change_flag: " ~ stage_change_flag, info=True) }}
+        {{ log("  cluster_change_flag: " ~ cluster_change_flag, info=True) }}
+        {{ log("  cluster_transformation_change_flag: " ~ cluster_transformation_change_flag, info=True) }}
+        {{ log("  file_pattern_change_flag: " ~ file_pattern_change_flag, info=True) }}
+        {{ log("  file_format_change_flag: " ~ file_format_change_flag, info=True) }}
+        {{ log("  table_change_flag: " ~ table_change_flag, info=True) }}
+        {{ log("  Total change reasons: " ~ change_reasons | join(", "), info=True) }}
     {% endif %}
     
     {# Generate SQL #}
@@ -272,7 +319,20 @@
         {% endif %}
     {% endif %}
     
-    {{ return({'success': true, 'action': action_type, 'pipe_name': full_pipe_name, 'changes': change_reasons, 'table_exists': table_exists, 'pipe_exists': pipe_exists}) }}
+    {{ return({
+        'success': true, 
+        'action': action_type, 
+        'pipe_name': full_pipe_name, 
+        'changes': change_reasons, 
+        'table_exists': table_exists, 
+        'pipe_exists': pipe_exists,
+        'stage_change_flag': stage_change_flag,
+        'cluster_change_flag': cluster_change_flag,
+        'cluster_transformation_change_flag': cluster_transformation_change_flag,
+        'file_pattern_change_flag': file_pattern_change_flag,
+        'file_format_change_flag': file_format_change_flag,
+        'table_change_flag': table_change_flag
+    }) }}
 {% endmacro %}
 
 {# Helper macro to get current pipe pause state #}

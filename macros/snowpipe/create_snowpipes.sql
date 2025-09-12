@@ -117,7 +117,7 @@
             {% set event_type = config[3] | string if config[3] else '' %}
             {% set event_display = event_name ~ (('_' ~ event_type) if event_type else '') %}
             
-            {# Determine actual status based on current state, not intended action #}
+            {# FIXED: Determine actual status based on current state, not intended action #}
             {% if result.success %}
                 {% do counters.update({'processed': counters.processed + 1}) %}
                 
@@ -171,7 +171,7 @@
         {% endfor %}
         
         {# Unicode footer #}
-        {{ log("└────────────────────────────────┴────────────┴────────────┴───────────────────┘", info=True) }}
+        {{ log("└────────────────────────────────┴────────────┴────────────┴───────────────────┴─────────────────────────────────┘", info=True) }}
         
         {# ============================ EXECUTION SUMMARY (HYBRID) ============================ #}
         {% set end_time = modules.datetime.datetime.now() %}

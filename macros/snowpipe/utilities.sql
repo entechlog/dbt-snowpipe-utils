@@ -119,6 +119,27 @@
     {{ return(cluster_result) }}
 {% endmacro %}
 
+{# Get current cluster transformation from pipe definition #}
+{% macro get_pipe_cluster_transformation(schema_name, pipe_name, cluster_key) %}
+    {% set query %}
+        SELECT COALESCE(
+            TRIM(REPLACE(
+                REGEXP_SUBSTR(definition, ',\\s*(.*?)\\s*AS\\s*"?{{ cluster_key|upper }}"?', 1, 1, 'ie', 1), 
+                ' AS ', ''
+            )), 
+            ''
+        ) as current_cluster_transformation
+        FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
+        WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+        AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
+        AND PIPE_NAME = UPPER('{{ pipe_name }}');
+    {% endset %}
+    {%- call statement('cluster_transformation_check', fetch_result=True) %}{{ query }}{%- endcall -%}
+    {%- set result = load_result('cluster_transformation_check')['data'] -%}
+    {% set transformation_result = result[0][0] if result|length > 0 and result[0][0] else '' %}
+    {{ return(transformation_result) }}
+{% endmacro %}
+
 -- =============================================================================
 -- STAGE FILE FORMAT DETECTION UTILITIES (using DESC STAGE)
 -- =============================================================================
