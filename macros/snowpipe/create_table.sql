@@ -227,12 +227,12 @@
             {% if current_cluster != expected_cluster %}
                 {% if cluster_key and cluster_key|trim != "" %}
                     {% if debug_mode %}
-                        {{ log("Updating clustering to: " ~ cluster_key, info=True) %}
+                        {{ log("Updating clustering to: " ~ cluster_key, info=True) }}
                     {% endif %}
                     ALTER TABLE {{ full_table_name }} CLUSTER BY ("{{ cluster_key }}");
                 {% else %}
                     {% if debug_mode %}
-                        {{ log("Removing clustering", info=True) %}
+                        {{ log("Removing clustering", info=True) }}
                     {% endif %}
                     ALTER TABLE {{ full_table_name }} DROP CLUSTERING KEY;
                 {% endif %}
