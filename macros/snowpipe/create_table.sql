@@ -64,7 +64,7 @@
                         )
                     )
                 {% else %}
-                    {# Create default named file formats for inference if they don't exist #}
+                    {# Create default named file formats for inference if they dont exist #}
                     {% if file_pattern|lower == 'json' %}
                         {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_JSON_FORMAT" %}
                         CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'JSON';
@@ -166,23 +166,78 @@
             {{ log("Mode: VARIANT column", info=True) }}
         {% endif %}
         
-        -- Create or replace VARIANT table
-        CREATE OR REPLACE TABLE {{ full_table_name }}
-        {% if cluster_key and cluster_key|trim != "" %}
-        CLUSTER BY ("{{ cluster_key }}")
-        {% endif %}
-        (
-            FILE_NAME VARCHAR(16777216) COMMENT 'Source file name', 
-            FILE_ROW_NUMBER NUMBER(38,0) COMMENT 'Row number in source file',
-            FILE_CONTENT_KEY VARCHAR(16777216) COMMENT 'File content hash',
-            FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'File last modified time',
-            LOADED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'When record was loaded',
-            DATA VARIANT COMMENT 'Full record data in VARIANT format'
-            {% if cluster_key and cluster_key|trim != "" %}
-            ,"{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column'
+        {% if not table_exists %}
+            -- Create new VARIANT table (SAFE: only when table doesn't exist)
+            {% if debug_mode %}
+                {{ log("Creating new VARIANT table", info=True) }}
             {% endif %}
-        );
-        
+            CREATE TABLE {{ full_table_name }}
+            {% if cluster_key and cluster_key|trim != "" %}
+            CLUSTER BY ("{{ cluster_key }}")
+            {% endif %}
+            (
+                FILE_NAME VARCHAR(16777216) COMMENT 'Source file name', 
+                FILE_ROW_NUMBER NUMBER(38,0) COMMENT 'Row number in source file',
+                FILE_CONTENT_KEY VARCHAR(16777216) COMMENT 'File content hash',
+                FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'File last modified time',
+                LOADED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'When record was loaded',
+                DATA VARIANT COMMENT 'Full record data in VARIANT format'
+                {% if cluster_key and cluster_key|trim != "" %}
+                ,"{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column'
+                {% endif %}
+            );
+        {% else %}
+            -- Table exists - apply incremental changes safely
+            {% if debug_mode %}
+                {{ log("VARIANT table exists - applying safe incremental changes", info=True) }}
+            {% endif %}
+            
+            -- Check if DATA column exists (should for VARIANT mode)
+            {% set data_column_check_query %}
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+                AND TABLE_SCHEMA = UPPER('{{ source_name }}')
+                AND TABLE_NAME = UPPER('{{ table_name }}')
+                AND COLUMN_NAME = 'DATA'
+            {% endset %}
+            {%- call statement('data_column_check', fetch_result=True) %}{{ data_column_check_query }}{%- endcall -%}
+            {%- set has_data_column = load_result('data_column_check')['data'][0][0] > 0 -%}
+            
+            {% if not has_data_column %}
+                -- Add DATA column if missing (converting from individual columns to VARIANT)
+                ALTER TABLE {{ full_table_name }} ADD COLUMN DATA VARIANT COMMENT 'Full record data in VARIANT format';
+            {% endif %}
+            
+            -- Ensure metadata columns exist
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_NAME VARCHAR(16777216) COMMENT 'Source file name';
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_ROW_NUMBER NUMBER(38,0) COMMENT 'Row number in source file';
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_CONTENT_KEY VARCHAR(16777216) COMMENT 'File content hash';
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'File last modified time';
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS LOADED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'When record was loaded';
+            
+            -- Handle cluster key column
+            {% if cluster_key and cluster_key|trim != "" %}
+                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column';
+            {% endif %}
+            
+            -- Update clustering if changed
+            {% set current_cluster = get_table_cluster_key(source_name, table_name) %}
+            {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
+            
+            {% if current_cluster != expected_cluster %}
+                {% if cluster_key and cluster_key|trim != "" %}
+                    {% if debug_mode %}
+                        {{ log("Updating clustering to: " ~ cluster_key, info=True) %}
+                    {% endif %}
+                    ALTER TABLE {{ full_table_name }} CLUSTER BY ("{{ cluster_key }}");
+                {% else %}
+                    {% if debug_mode %}
+                        {{ log("Removing clustering", info=True) %}
+                    {% endif %}
+                    ALTER TABLE {{ full_table_name }} DROP CLUSTERING KEY;
+                {% endif %}
+            {% endif %}
+        {% endif %}
     {% endif %}
     
     -- Perform initial data load for new tables only

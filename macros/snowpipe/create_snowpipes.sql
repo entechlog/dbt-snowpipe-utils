@@ -117,24 +117,42 @@
             {% set event_type = config[3] | string if config[3] else '' %}
             {% set event_display = event_name ~ (('_' ~ event_type) if event_type else '') %}
             
-            {# Update counters and set simple status text (no emojis) #}
+            {# Determine actual status based on current state, not intended action #}
             {% if result.success %}
                 {% do counters.update({'processed': counters.processed + 1}) %}
-                {% if result.action == 'created' %}
-                    {% do counters.update({'created': counters.created + 1}) %}
-                    {% set table_status = "EXISTS" %}
-                    {% set pipe_status = "EXISTS" %}
-                    {% set action_status = "CREATED" %}
-                {% elif result.action == 'updated' %}
-                    {% do counters.update({'updated': counters.updated + 1}) %}
-                    {% set table_status = "EXISTS" %}
-                    {% set pipe_status = "EXISTS" %}
-                    {% set action_status = "UPDATED" %}
+                
+                {# For dry run mode: show current state, not intended state #}
+                {% if not run_queries %}
+                    {% set table_status = "EXISTS" if result.table_exists else "MISSING" %}
+                    {% set pipe_status = "EXISTS" if result.pipe_exists else "MISSING" %}
+                    {% if result.action == 'created' %}
+                        {% set action_status = "WOULD CREATE" %}
+                        {% do counters.update({'created': counters.created + 1}) %}
+                    {% elif result.action == 'updated' %}
+                        {% set action_status = "WOULD UPDATE" %}
+                        {% do counters.update({'updated': counters.updated + 1}) %}
+                    {% else %}
+                        {% set action_status = "NO CHANGES" %}
+                        {% do counters.update({'skipped': counters.skipped + 1}) %}
+                    {% endif %}
                 {% else %}
-                    {% do counters.update({'skipped': counters.skipped + 1}) %}
-                    {% set table_status = "EXISTS" %}
-                    {% set pipe_status = "EXISTS" %}
-                    {% set action_status = "SKIPPED" %}
+                    {# For execution mode: show post-execution state #}
+                    {% if result.action == 'created' %}
+                        {% do counters.update({'created': counters.created + 1}) %}
+                        {% set table_status = "CREATED" %}
+                        {% set pipe_status = "CREATED" %}
+                        {% set action_status = "CREATED" %}
+                    {% elif result.action == 'updated' %}
+                        {% do counters.update({'updated': counters.updated + 1}) %}
+                        {% set table_status = "UPDATED" %}
+                        {% set pipe_status = "UPDATED" %}
+                        {% set action_status = "UPDATED" %}
+                    {% else %}
+                        {% do counters.update({'skipped': counters.skipped + 1}) %}
+                        {% set table_status = "EXISTS" %}
+                        {% set pipe_status = "EXISTS" %}
+                        {% set action_status = "SKIPPED" %}
+                    {% endif %}
                 {% endif %}
             {% else %}
                 {% do counters.update({'errors': counters.errors + 1}) %}
