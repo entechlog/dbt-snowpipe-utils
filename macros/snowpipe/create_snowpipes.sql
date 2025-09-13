@@ -53,18 +53,18 @@
             {{ return(none) }}
         {% endif %}
         
-        {# ===================== CONFIGURATION SUMMARY (HYBRID) ===================== #}
+        {# ===================== CONFIGURATION SUMMARY ===================== #}
         {{ log("", info=True) }}
         {{ log("📋 CONFIGURATION SUMMARY", info=True) }}
         {{ log("Found " ~ configs|length ~ " pipe configurations to process", info=True) }}
         {{ log("", info=True) }}
         
-        {# Unicode header (since this works in debug) #}
+        {# Configuration table header #}
         {{ log("┌─────────────────────┬──────────────────────┬─────────────┬─────────────┬─────────────┐", info=True) }}
         {{ log("│ Source              │ Event                │ Pattern     │ Schema Inf  │ Schema Evo  │", info=True) }}
         {{ log("├─────────────────────┼──────────────────────┼─────────────┼─────────────┼─────────────┤", info=True) }}
         
-        {# ASCII data rows (more reliable for loops) #}
+        {# Configuration data rows #}
         {% for config in configs %}
             {% set source_name = config[1] | string %}
             {% set event_name = config[2] | string %}
@@ -87,17 +87,18 @@
             {{ log("| " ~ padded_source ~ " | " ~ padded_event ~ " | " ~ padded_pattern ~ " | " ~ padded_inf ~ " | " ~ padded_evo ~ " |", info=True) }}
         {% endfor %}
         
-        {# Unicode footer #}
+        {# Configuration table footer #}
         {{ log("└─────────────────────┴──────────────────────┴─────────────┴─────────────┴─────────────┘", info=True) }}
         
-        {# ========================= PROCESSING PIPES (HYBRID) ========================== #}
+        {# ========================= PROCESSING PIPES WITH CHANGE DETECTION ========================== #}
         {{ log("", info=True) }}
         {{ log("⚙️  PROCESSING PIPES", info=True) }}
         
-        {# Unicode header #}
-        {{ log("┌────────────────────────────────┬────────────┬────────────┬───────────────────┐", info=True) }}
-        {{ log("│ Event                          │ Table      │ Pipe       │ Action            │", info=True) }}
-        {{ log("├────────────────────────────────┼────────────┼────────────┼───────────────────┤", info=True) }}
+        {# Enhanced header with change detection columns using full words #}
+        {{ log("┌──────────────────────┬────────┬────────┬─────────────┬─────────┬─────────┬─────────┬─────────┐", info=True) }}
+        {{ log("│ Event                │ Table  │ Pipe   │ Action      │ Stage   │ Cluster │ Pattern │ Format  │", info=True) }}
+        {{ log("│                      │        │        │             │ Change  │ Change  │ Change  │ Change  │", info=True) }}
+        {{ log("├──────────────────────┼────────┼────────┼─────────────┼─────────┼─────────┼─────────┼─────────┤", info=True) }}
         
         {# Initialize counters #}
         {% set counters = {
@@ -109,7 +110,7 @@
             'errors': 0
         } %}
         
-        {# Process each configuration - ASCII data rows #}
+        {# Process each configuration with enhanced change detection #}
         {% for config in configs %}
             {% set result = create_single_snowpipe(config, run_queries, debug_mode) %}
             
@@ -117,35 +118,35 @@
             {% set event_type = config[3] | string if config[3] else '' %}
             {% set event_display = event_name ~ (('_' ~ event_type) if event_type else '') %}
             
-            {# FIXED: Determine actual status based on current state, not intended action #}
+            {# Determine status based on execution mode #}
             {% if result.success %}
                 {% do counters.update({'processed': counters.processed + 1}) %}
                 
                 {# For dry run mode: show current state, not intended state #}
                 {% if not run_queries %}
-                    {% set table_status = "EXISTS" if result.table_exists else "MISSING" %}
-                    {% set pipe_status = "EXISTS" if result.pipe_exists else "MISSING" %}
+                    {% set table_status = "EXISTS" if result.table_exists else "MISS" %}
+                    {% set pipe_status = "EXISTS" if result.pipe_exists else "MISS" %}
                     {% if result.action == 'created' %}
-                        {% set action_status = "WOULD CREATE" %}
+                        {% set action_status = "W-CREATE" %}
                         {% do counters.update({'created': counters.created + 1}) %}
                     {% elif result.action == 'updated' %}
-                        {% set action_status = "WOULD UPDATE" %}
+                        {% set action_status = "W-UPDATE" %}
                         {% do counters.update({'updated': counters.updated + 1}) %}
                     {% else %}
-                        {% set action_status = "NO CHANGES" %}
+                        {% set action_status = "NO-CHANGE" %}
                         {% do counters.update({'skipped': counters.skipped + 1}) %}
                     {% endif %}
                 {% else %}
                     {# For execution mode: show post-execution state #}
                     {% if result.action == 'created' %}
                         {% do counters.update({'created': counters.created + 1}) %}
-                        {% set table_status = "CREATED" %}
-                        {% set pipe_status = "CREATED" %}
+                        {% set table_status = "CREATE" %}
+                        {% set pipe_status = "CREATE" %}
                         {% set action_status = "CREATED" %}
                     {% elif result.action == 'updated' %}
                         {% do counters.update({'updated': counters.updated + 1}) %}
-                        {% set table_status = "UPDATED" %}
-                        {% set pipe_status = "UPDATED" %}
+                        {% set table_status = "UPDATE" %}
+                        {% set pipe_status = "UPDATE" %}
                         {% set action_status = "UPDATED" %}
                     {% else %}
                         {% do counters.update({'skipped': counters.skipped + 1}) %}
@@ -161,31 +162,45 @@
                 {% set action_status = "FAILED" %}
             {% endif %}
             
-            {# Simplified padding #}
-            {% set padded_event = (event_display ~ '                              ')[:30] %}
-            {% set padded_table = (table_status ~ '          ')[:10] %}
-            {% set padded_pipe = (pipe_status ~ '          ')[:10] %}
-            {% set padded_action = (action_status ~ '                 ')[:17] %}
+            {# Enhanced formatting with change detection flags using full words #}
+            {% set padded_event = (event_display ~ '                      ')[:20] %}
+            {% set padded_table = (table_status ~ '        ')[:6] %}
+            {% set padded_pipe = (pipe_status ~ '        ')[:6] %}
+            {% set padded_action = (action_status ~ '             ')[:11] %}
             
-            {{ log("| " ~ padded_event ~ " | " ~ padded_table ~ " | " ~ padded_pipe ~ " | " ~ padded_action ~ " |", info=True) }}
+            {# Change flags - show YES/NO for each type using full words #}
+            {% set stage_flag = 'YES' if result.get('stage_change_flag', false) else 'NO' %}
+            {% set cluster_flag = 'YES' if result.get('cluster_change_flag', false) else 'NO' %}
+            {% set pattern_flag = 'YES' if result.get('file_pattern_change_flag', false) else 'NO' %}
+            {% set format_flag = 'YES' if result.get('file_format_change_flag', false) else 'NO' %}
+            
+            {% set padded_stage = (stage_flag ~ '         ')[:7] %}
+            {% set padded_cluster = (cluster_flag ~ '         ')[:7] %}
+            {% set padded_pattern = (pattern_flag ~ '         ')[:7] %}
+            {% set padded_format = (format_flag ~ '         ')[:7] %}
+            
+            {{ log("│ " ~ padded_event ~ " │ " ~ padded_table ~ " │ " ~ padded_pipe ~ " │ " ~ padded_action ~ " │ " ~ padded_stage ~ " │ " ~ padded_cluster ~ " │ " ~ padded_pattern ~ " │ " ~ padded_format ~ " │", info=True) }}
         {% endfor %}
         
-        {# Unicode footer #}
-        {{ log("└────────────────────────────────┴────────────┴────────────┴───────────────────┴─────────────────────────────────┘", info=True) }}
+        {# Enhanced footer #}
+        {{ log("└──────────────────────┴────────┴────────┴─────────────┴─────────┴─────────┴─────────┴─────────┘", info=True) }}
+        {{ log("", info=True) }}
+        {{ log("💡 Change Flags: Stage = Stage name change, Cluster = Cluster key change", info=True) }}
+        {{ log("               Pattern = File pattern change, Format = File format change", info=True) }}
         
-        {# ============================ EXECUTION SUMMARY (HYBRID) ============================ #}
+        {# ============================ EXECUTION SUMMARY ============================ #}
         {% set end_time = modules.datetime.datetime.now() %}
         {% set duration = end_time - start_time %}
         
         {{ log("", info=True) }}
         {{ log("📊 EXECUTION SUMMARY", info=True) }}
         
-        {# Unicode header #}
+        {# Summary table header #}
         {{ log("┌─────────────────────────────────┬──────────────────────────────────────┐", info=True) }}
         {{ log("│ Metric                          │ Value                                │", info=True) }}
         {{ log("├─────────────────────────────────┼──────────────────────────────────────┤", info=True) }}
         
-        {# ASCII data rows #}
+        {# Summary data rows #}
         {% set summary_items = [
             ('Total Configurations', counters.total),
             ('Created', counters.created),
@@ -198,10 +213,10 @@
         {% for metric, value in summary_items %}
             {% set padded_metric = (metric ~ '                               ')[:31] %}
             {% set padded_value = ((value | string) ~ '                                    ')[:36] %}
-            {{ log("| " ~ padded_metric ~ " | " ~ padded_value ~ " |", info=True) }}
+            {{ log("│ " ~ padded_metric ~ " │ " ~ padded_value ~ " │", info=True) }}
         {% endfor %}
         
-        {# Unicode footer #}
+        {# Summary table footer #}
         {{ log("└─────────────────────────────────┴──────────────────────────────────────┘", info=True) }}
         
         {# Status messages #}
