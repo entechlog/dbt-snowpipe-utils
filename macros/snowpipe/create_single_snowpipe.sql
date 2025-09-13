@@ -245,9 +245,12 @@
         {{ log("  Total change reasons: " ~ change_reasons | join(", "), info=True) }}
     {% endif %}
     
-    {# FIXED: Determine action type based on actual changes needed #}
+    {# Determine action type based on actual change flags, not requires_* flags #}
     {% set action_type = 'skipped' %}
     {% set needs_ddl_execution = false %}
+    
+    {# Check if ANY actual change flag is true (excluding pause state for DDL decisions) #}
+    {% set has_structural_changes = (stage_change_flag or cluster_change_flag or cluster_transformation_change_flag or file_pattern_change_flag or file_format_change_flag or table_change_flag) %}
     
     {% if not table_exists and not pipe_exists %}
         {% set action_type = 'created' %}
@@ -255,21 +258,30 @@
     {% elif not table_exists or not pipe_exists %}
         {% set action_type = 'created' %}
         {% set needs_ddl_execution = true %}
-    {% elif requires_table_creation or requires_pipe_recreation %}
+    {% elif has_structural_changes %}
         {% set action_type = 'updated' %}
         {% set needs_ddl_execution = true %}
     {% elif pause_state_change_flag %}
         {% set action_type = 'updated' %}
-        {% set needs_ddl_execution = true %}
+        {% set needs_ddl_execution = true %}  {# But only for ALTER PIPE, not DROP/CREATE #}
     {% else %}
         {% set action_type = 'skipped' %}
         {% set needs_ddl_execution = false %}
     {% endif %}
     
+    {# Override requires_* flags when no structural changes are detected #}
+    {% if not has_structural_changes and table_exists and pipe_exists %}
+        {% set requires_table_creation = false %}
+        {% set requires_pipe_recreation = false %}
+    {% endif %}
+    
     {% if debug_mode %}
         {{ log("Final decision:", info=True) }}
+        {{ log("  has_structural_changes: " ~ has_structural_changes, info=True) }}
         {{ log("  action_type: " ~ action_type, info=True) }}
         {{ log("  needs_ddl_execution: " ~ needs_ddl_execution, info=True) }}
+        {{ log("  requires_table_creation (final): " ~ requires_table_creation, info=True) }}
+        {{ log("  requires_pipe_recreation (final): " ~ requires_pipe_recreation, info=True) }}
     {% endif %}
     
     {# Generate SQL - only if changes are needed #}
@@ -280,7 +292,7 @@
         USE WAREHOUSE {{ var("snowpipe_warehouse") }};
         
         {% if needs_ddl_execution %}
-            -- {{ full_pipe_name }}: {{ change_reasons | join(', ') if change_reasons|length > 0 else 'Pause state change' }}
+            -- {{ full_pipe_name }}: {{ change_reasons | join(', ') if change_reasons|length > 0 else 'Pause state change only' }}
             
             {% if requires_table_creation %}
                 {{ create_table_sql(
