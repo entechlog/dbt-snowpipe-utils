@@ -248,7 +248,6 @@
             {% endif %}
             
             {% if requires_pipe_recreation %}
-                
                 {{ create_pipe_sql(
                     pipe_name, 
                     table_name, 
@@ -268,29 +267,19 @@
             
         {% else %}
             -- {{ full_pipe_name }}: No changes required
-            {% set current_paused = get_pipe_pause_state(source_name, pipe_name) %}
-            {% if current_paused != pause_pipe_flag %}
-                {% if pause_pipe_flag %}
-                    ALTER PIPE IF EXISTS {{ full_pipe_name }} SET PIPE_EXECUTION_PAUSED = TRUE;
-                {% else %}
-                    SELECT SYSTEM$PIPE_FORCE_RESUME('{{ full_pipe_name }}');
-                {% endif %}
-            {% else %}
-                SELECT 'No changes required for {{ full_pipe_name }}' AS status;
-            {% endif %}
+            SELECT 'No changes required for {{ full_pipe_name }}' AS status;
         {% endif %}
     {% endset %}
     
-    {# Determine action type - MINIMAL FIX #}
+    {# Determine action type - MINIMAL + STABLE #}
     {% set action_type = 'none' %}
     {% if requires_table_creation and requires_pipe_recreation %}
         {% set action_type = 'created' %}
-    {% elif requires_pipe_recreation or requires_table_creation %}
-        {% set action_type = 'updated' %}
-    {% elif get_pipe_pause_state(source_name, pipe_name) != pause_pipe_flag %}
+    {% elif requires_table_creation or requires_pipe_recreation %}
         {% set action_type = 'updated' %}
     {% else %}
         {% set action_type = 'skipped' %}
+    {% endif %}
     {% endif %}
     
     {# Execute if requested #}
