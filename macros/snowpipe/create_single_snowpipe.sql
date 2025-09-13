@@ -220,14 +220,15 @@
     
     {# Generate SQL #}
     {% set creation_sql %}
+
         USE ROLE {{ var("snowpipe_admin_role") }};
         USE DATABASE {{ var("snowpipe_database") }};
         USE SCHEMA {{ source_name }};
         USE WAREHOUSE {{ var("snowpipe_warehouse") }};
-        
+
         {% if requires_table_creation or requires_pipe_recreation %}
             -- {{ full_pipe_name }}: {{ change_reasons | join(', ') }}
-            
+
             {% if requires_table_creation %}
                 {{ create_table_sql(
                     table_name, 
@@ -246,9 +247,8 @@
                     debug_mode
                 ) }}
             {% endif %}
-            
+
             {% if requires_pipe_recreation %}
-                
                 {{ create_pipe_sql(
                     pipe_name, 
                     table_name, 
@@ -263,12 +263,14 @@
                     source_name
                 ) }}
             {% endif %}
-            
+
             {{ set_permissions_sql(full_pipe_name, full_table_name, pause_pipe_flag) }}
-            
+
         {% else %}
             -- {{ full_pipe_name }}: No changes required
+
             {% set current_paused = get_pipe_pause_state(source_name, pipe_name) %}
+
             {% if current_paused != pause_pipe_flag %}
                 {% if pause_pipe_flag %}
                     ALTER PIPE IF EXISTS {{ full_pipe_name }} SET PIPE_EXECUTION_PAUSED = TRUE;
@@ -279,24 +281,20 @@
                 SELECT 'No changes required for {{ full_pipe_name }}' AS status;
             {% endif %}
         {% endif %}
+
     {% endset %}
     
     {# Determine action type - MINIMAL FIX #}
     {% set action_type = 'none' %}
     {% if requires_table_creation and requires_pipe_recreation %}
         {% set action_type = 'created' %}
-    {% elif requires_pipe_recreation %}
+    {% elif requires_pipe_recreation or requires_table_creation %}
         {% set action_type = 'updated' %}
-    {% elif requires_table_creation %}
+    {% elif get_pipe_pause_state(source_name, pipe_name) != pause_pipe_flag %}
         {% set action_type = 'updated' %}
     {% else %}
-        {# Check pause state only when no other changes #}
-        {% set current_paused = get_pipe_pause_state(source_name, pipe_name) %}
-        {% if current_paused != pause_pipe_flag %}
-            {% set action_type = 'updated' %}
-        {% else %}
-            {% set action_type = 'skipped' %}
-        {% endif %}
+        {% set action_type = 'skipped' %}
+    {% endif %}
     {% endif %}
     
     {# Execute if requested #}
