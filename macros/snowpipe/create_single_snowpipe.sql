@@ -1,3 +1,21 @@
+{# Helper macro to get current pipe pause state #}
+{% macro get_pipe_pause_state(schema_name, pipe_name) %}
+    {% set query %}
+        SELECT 
+            CASE 
+                WHEN UPPER(definition) LIKE '%PIPE_EXECUTION_PAUSED%=%TRUE%' THEN TRUE
+                ELSE FALSE 
+            END as is_paused
+        FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
+        WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+        AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
+        AND PIPE_NAME = UPPER('{{ pipe_name }}');
+    {% endset %}
+    {%- call statement('pause_check', fetch_result=True) %}{{ query }}{%- endcall -%}
+    {%- set result = load_result('pause_check')['data'] -%}
+    {{ return(result[0][0] if result|length > 0 else false) }}
+{% endmacro %}
+
 {% macro create_single_snowpipe(config, run_queries=False, debug_mode=False) %}
     {# Extract configuration values - updated indices for new columns #}
     {% set stage_base = config[0] %}
@@ -315,6 +333,7 @@
                 {{ log("No changes detected for " ~ full_pipe_name, info=True) }}
             {% endif %}
         {% endif %}
+    {% endif %}
     
     {{ return({
         'success': true, 
@@ -330,22 +349,4 @@
         'file_format_change_flag': file_format_change_flag,
         'table_change_flag': table_change_flag
     }) }}
-{% endmacro %}
-
-{# Helper macro to get current pipe pause state #}
-{% macro get_pipe_pause_state(schema_name, pipe_name) %}
-    {% set query %}
-        SELECT 
-            CASE 
-                WHEN UPPER(definition) LIKE '%PIPE_EXECUTION_PAUSED%=%TRUE%' THEN TRUE
-                ELSE FALSE 
-            END as is_paused
-        FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
-        WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
-        AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
-        AND PIPE_NAME = UPPER('{{ pipe_name }}');
-    {% endset %}
-    {%- call statement('pause_check', fetch_result=True) %}{{ query }}{%- endcall -%}
-    {%- set result = load_result('pause_check')['data'] -%}
-    {{ return(result[0][0] if result|length > 0 else false) }}
 {% endmacro %}
