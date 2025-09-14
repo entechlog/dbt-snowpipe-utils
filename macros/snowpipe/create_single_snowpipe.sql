@@ -248,6 +248,7 @@
             {% endif %}
             
             {% if requires_pipe_recreation %}
+                
                 {{ create_pipe_sql(
                     pipe_name, 
                     table_name, 
@@ -267,7 +268,16 @@
             
         {% else %}
             -- {{ full_pipe_name }}: No changes required
-            SELECT 'No changes required for {{ full_pipe_name }}' AS status;
+            {% set current_paused = get_pipe_pause_state(source_name, pipe_name) %}
+            {% if current_paused != pause_pipe_flag %}
+                {% if pause_pipe_flag %}
+                    ALTER PIPE IF EXISTS {{ full_pipe_name }} SET PIPE_EXECUTION_PAUSED = TRUE;
+                {% else %}
+                    SELECT SYSTEM$PIPE_FORCE_RESUME('{{ full_pipe_name }}');
+                {% endif %}
+            {% else %}
+                SELECT 'No changes required for {{ full_pipe_name }}' AS status;
+            {% endif %}
         {% endif %}
     {% endset %}
     
