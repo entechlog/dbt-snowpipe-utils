@@ -117,9 +117,10 @@
         {% set current_paused = get_pipe_pause_state(source_name, pipe_name) %}
     {% endif %}
     
-    {# Simplified change detection #}
+    {# change detection logic #}
     {% set requires_pipe_recreation = false %}
     {% set requires_table_creation = false %}
+    {% set requires_pause_change = false %}
     {% set change_reasons = [] %}
     {% set stage_change_flag = false %}
     {% set cluster_change_flag = false %}
@@ -127,7 +128,9 @@
     {% set file_pattern_change_flag = false %}
     {% set file_format_change_flag = false %}
     {% set table_change_flag = false %}
+    {% set pause_change_flag = false %}
     
+    {# 1. Check if table needs to be created or updated #}
     {% if not table_exists %}
         {% set requires_table_creation = true %}
         {% set table_change_flag = true %}
@@ -155,11 +158,12 @@
         {% endif %}
     {% endif %}
     
+    {# 2. Check if pipe needs to be created or updated #}
     {% if not pipe_exists %}
         {% set requires_pipe_recreation = true %}
         {% do change_reasons.append("Pipe missing") %}
     {% else %}
-        {# Check for pipe configuration changes #}
+        {# Pipe exists - check for configuration changes #}
         {% set expected_stage = full_stage_name|upper %}
         {% if current_stage != expected_stage %}
             {% set requires_pipe_recreation = true %}
@@ -191,7 +195,7 @@
             {% endif %}
         {% endif %}
         
-        {# Check clustering changes #}
+        {# Check clustering changes - this affects TABLE, not just pipe #}
         {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
         
         {% if debug_mode %}
@@ -204,6 +208,7 @@
         {% if current_cluster|trim|upper != expected_cluster|trim|upper %}
             {% set requires_table_creation = true %}
             {% set cluster_change_flag = true %}
+            {% set table_change_flag = true %}
             {% do change_reasons.append("Clustering changed") %}
             {% if debug_mode %}
                 {{ log("Clustering change detected - will recreate table", info=True) }}
@@ -222,6 +227,16 @@
                 {% endif %}
             {% endif %}
         {% endif %}
+        
+        {# Check pause state changes #}
+        {% if current_paused != pause_pipe_flag %}
+            {% set requires_pause_change = true %}
+            {% set pause_change_flag = true %}
+            {% do change_reasons.append("Pause state changed") %}
+            {% if debug_mode %}
+                {{ log("Pause state change detected: " ~ current_paused ~ " -> " ~ pause_pipe_flag, info=True) }}
+            {% endif %}
+        {% endif %}
     {% endif %}
     
     {# Log all detected changes #}
@@ -233,17 +248,21 @@
         {{ log("  file_pattern_change_flag: " ~ file_pattern_change_flag, info=True) }}
         {{ log("  file_format_change_flag: " ~ file_format_change_flag, info=True) }}
         {{ log("  table_change_flag: " ~ table_change_flag, info=True) }}
+        {{ log("  pause_change_flag: " ~ pause_change_flag, info=True) }}
         {{ log("  Total change reasons: " ~ change_reasons | join(", "), info=True) }}
     {% endif %}
     
-    {# Generate SQL #}
+    {# Determine if ANY changes are needed #}
+    {% set any_changes_needed = (requires_table_creation or requires_pipe_recreation or requires_pause_change) %}
+    
+    {# Generate SQL only when changes are actually needed #}
     {% set creation_sql %}
-        USE ROLE {{ var("snowpipe_admin_role") }};
-        USE DATABASE {{ var("snowpipe_database") }};
-        USE SCHEMA {{ source_name }};
-        USE WAREHOUSE {{ var("snowpipe_warehouse") }};
-        
-        {% if requires_table_creation or requires_pipe_recreation %}
+        {% if any_changes_needed %}
+            USE ROLE {{ var("snowpipe_admin_role") }};
+            USE DATABASE {{ var("snowpipe_database") }};
+            USE SCHEMA {{ source_name }};
+            USE WAREHOUSE {{ var("snowpipe_warehouse") }};
+            
             -- {{ full_pipe_name }}: {{ change_reasons | join(', ') }}
             
             {% if requires_table_creation %}
@@ -266,7 +285,6 @@
             {% endif %}
             
             {% if requires_pipe_recreation %}
-                
                 {{ create_pipe_sql(
                     pipe_name, 
                     table_name, 
@@ -282,36 +300,33 @@
                 ) }}
             {% endif %}
             
-            {{ set_permissions_sql(full_pipe_name, full_table_name, pause_pipe_flag) }}
-            
-        {% else %}
-            -- {{ full_pipe_name }}: No changes required
-            {% set current_paused = get_pipe_pause_state(source_name, pipe_name) %}
-            {% if current_paused != pause_pipe_flag %}
+            {% if requires_table_creation or requires_pipe_recreation %}
+                {{ set_permissions_sql(full_pipe_name, full_table_name, pause_pipe_flag) }}
+            {% elif requires_pause_change %}
+                -- Only pause state changed
                 {% if pause_pipe_flag %}
                     ALTER PIPE IF EXISTS {{ full_pipe_name }} SET PIPE_EXECUTION_PAUSED = TRUE;
                 {% else %}
                     SELECT SYSTEM$PIPE_FORCE_RESUME('{{ full_pipe_name }}');
                 {% endif %}
-            {% else %}
-                SELECT 'No changes required for {{ full_pipe_name }}' AS status;
             {% endif %}
+        {% else %}
+            -- {{ full_pipe_name }}: No changes required
+            SELECT 'No changes required for {{ full_pipe_name }}' AS status;
         {% endif %}
     {% endset %}
     
-    {# Determine action type - MINIMAL + STABLE #}
-    {% set action_type = 'none' %}
-    {% if requires_table_creation and requires_pipe_recreation %}
+    {# Determine action type #}
+    {% set action_type = 'skipped' %}
+    {% if not table_exists and not pipe_exists %}
         {% set action_type = 'created' %}
-    {% elif requires_table_creation or requires_pipe_recreation %}
+    {% elif any_changes_needed %}
         {% set action_type = 'updated' %}
-    {% else %}
-        {% set action_type = 'skipped' %}
     {% endif %}
     
     {# Execute if requested #}
     {% if run_queries %}
-        {% if change_reasons|length > 0 %}
+        {% if any_changes_needed %}
             {% if debug_mode %}
                 {{ log("Executing changes for " ~ full_pipe_name ~ ": " ~ change_reasons | join(", "), info=True) }}
             {% endif %}
@@ -327,7 +342,7 @@
         {% endif %}
     {% else %}
         {% if debug_mode %}
-            {% if change_reasons|length > 0 %}
+            {% if any_changes_needed %}
                 {{ log("Would execute changes for " ~ full_pipe_name ~ ": " ~ change_reasons | join(", "), info=True) }}
             {% else %}
                 {{ log("No changes detected for " ~ full_pipe_name, info=True) }}
@@ -347,6 +362,7 @@
         'cluster_transformation_change_flag': cluster_transformation_change_flag,
         'file_pattern_change_flag': file_pattern_change_flag,
         'file_format_change_flag': file_format_change_flag,
-        'table_change_flag': table_change_flag
+        'table_change_flag': table_change_flag,
+        'pause_change_flag': pause_change_flag
     }) }}
 {% endmacro %}
