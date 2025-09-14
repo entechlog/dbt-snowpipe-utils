@@ -6,7 +6,7 @@
         {% if run_queries %}
             {{ log("🚀 SNOWPIPE CREATION - EXECUTION MODE", info=True) }}
         {% else %}
-            {{ log("🔍 SNOWPIPE CREATION - DRY RUN MODE", info=True) }}
+            {{ log("📋 SNOWPIPE CREATION - DRY RUN MODE", info=True) }}
         {% endif %}
         {{ log("=" * 80, info=True) }}
         
@@ -84,7 +84,7 @@
             {% set padded_inf = (inf_text ~ '           ')[:11] %}
             {% set padded_evo = (evo_text ~ '           ')[:11] %}
             
-            {{ log("| " ~ padded_source ~ " | " ~ padded_event ~ " | " ~ padded_pattern ~ " | " ~ padded_inf ~ " | " ~ padded_evo ~ " |", info=True) }}
+            {{ log("│ " ~ padded_source ~ " │ " ~ padded_event ~ " │ " ~ padded_pattern ~ " │ " ~ padded_inf ~ " │ " ~ padded_evo ~ " │", info=True) }}
         {% endfor %}
         
         {# Configuration table footer #}
@@ -94,11 +94,11 @@
         {{ log("", info=True) }}
         {{ log("⚙️  PROCESSING PIPES", info=True) }}
         
-        {# Enhanced header with change detection columns using full words #}
-        {{ log("┌──────────────────────┬────────┬────────┬─────────────┬─────────┬─────────┬─────────┬─────────┐", info=True) }}
-        {{ log("│ Event                │ Table  │ Pipe   │ Action      │ Stage   │ Cluster │ Pattern │ Format  │", info=True) }}
-        {{ log("│                      │        │        │             │ Change  │ Change  │ Change  │ Change  │", info=True) }}
-        {{ log("├──────────────────────┼────────┼────────┼─────────────┼─────────┼─────────┼─────────┼─────────┤", info=True) }}
+        {# Enhanced header with change detection columns using full words plus Table column #}
+        {{ log("┌──────────────────────┬────────┬────────┬─────────────┬─────────┬─────────┬─────────┬─────────┬───────┐", info=True) }}
+        {{ log("│ Event                │ Table  │ Pipe   │ Action      │ Stage   │ Cluster │ Pattern │ Format  │ Table │", info=True) }}
+        {{ log("│                      │        │        │             │ Change  │ Change  │ Change  │ Change  │ Change│", info=True) }}
+        {{ log("├──────────────────────┼────────┼────────┼─────────────┼─────────┼─────────┼─────────┼─────────┼───────┤", info=True) }}
         
         {# Initialize counters #}
         {% set counters = {
@@ -118,42 +118,25 @@
             {% set event_type = config[3] | string if config[3] else '' %}
             {% set event_display = event_name ~ (('_' ~ event_type) if event_type else '') %}
             
-            {# Determine status based on execution mode #}
+            {# FIXED: Determine status based on result.action, not execution mode #}
             {% if result.success %}
                 {% do counters.update({'processed': counters.processed + 1}) %}
                 
-                {# For dry run mode: show current state, not intended state #}
-                {% if not run_queries %}
-                    {% set table_status = "EXISTS" if result.table_exists else "MISS" %}
-                    {% set pipe_status = "EXISTS" if result.pipe_exists else "MISS" %}
-                    {% if result.action == 'created' %}
-                        {% set action_status = "W-CREATE" %}
-                        {% do counters.update({'created': counters.created + 1}) %}
-                    {% elif result.action == 'updated' %}
-                        {% set action_status = "W-UPDATE" %}
-                        {% do counters.update({'updated': counters.updated + 1}) %}
-                    {% else %}
-                        {% set action_status = "NO-CHANGE" %}
-                        {% do counters.update({'skipped': counters.skipped + 1}) %}
-                    {% endif %}
+                {% if result.action == 'created' %}
+                    {% do counters.update({'created': counters.created + 1}) %}
+                    {% set table_status = "CREATE" %}
+                    {% set pipe_status = "CREATE" %}
+                    {% set action_status = "CREATED" %}
+                {% elif result.action == 'updated' %}
+                    {% do counters.update({'updated': counters.updated + 1}) %}
+                    {% set table_status = "UPDATE" %}
+                    {% set pipe_status = "UPDATE" %}
+                    {% set action_status = "UPDATED" %}
                 {% else %}
-                    {# For execution mode: show post-execution state #}
-                    {% if result.action == 'created' %}
-                        {% do counters.update({'created': counters.created + 1}) %}
-                        {% set table_status = "CREATE" %}
-                        {% set pipe_status = "CREATE" %}
-                        {% set action_status = "CREATED" %}
-                    {% elif result.action == 'updated' %}
-                        {% do counters.update({'updated': counters.updated + 1}) %}
-                        {% set table_status = "UPDATE" %}
-                        {% set pipe_status = "UPDATE" %}
-                        {% set action_status = "UPDATED" %}
-                    {% else %}
-                        {% do counters.update({'skipped': counters.skipped + 1}) %}
-                        {% set table_status = "EXISTS" %}
-                        {% set pipe_status = "EXISTS" %}
-                        {% set action_status = "SKIPPED" %}
-                    {% endif %}
+                    {% do counters.update({'skipped': counters.skipped + 1}) %}
+                    {% set table_status = "EXISTS" %}
+                    {% set pipe_status = "EXISTS" %}
+                    {% set action_status = "SKIPPED" %}
                 {% endif %}
             {% else %}
                 {% do counters.update({'errors': counters.errors + 1}) %}
@@ -164,7 +147,7 @@
             
             {# Enhanced formatting with change detection flags using full words #}
             {% set padded_event = (event_display ~ '                      ')[:20] %}
-            {% set padded_table = (table_status ~ '        ')[:6] %}
+            {% set padded_table_status = (table_status ~ '        ')[:6] %}
             {% set padded_pipe = (pipe_status ~ '        ')[:6] %}
             {% set padded_action = (action_status ~ '             ')[:11] %}
             
@@ -173,20 +156,23 @@
             {% set cluster_flag = 'YES' if result.get('cluster_change_flag', false) else 'NO' %}
             {% set pattern_flag = 'YES' if result.get('file_pattern_change_flag', false) else 'NO' %}
             {% set format_flag = 'YES' if result.get('file_format_change_flag', false) else 'NO' %}
+            {% set table_change_flag_display = 'YES' if result.get('table_change_flag', false) else 'NO' %}
             
             {% set padded_stage = (stage_flag ~ '         ')[:7] %}
             {% set padded_cluster = (cluster_flag ~ '         ')[:7] %}
             {% set padded_pattern = (pattern_flag ~ '         ')[:7] %}
             {% set padded_format = (format_flag ~ '         ')[:7] %}
+            {% set padded_table_change = (table_change_flag_display ~ '       ')[:5] %}
             
-            {{ log("│ " ~ padded_event ~ " │ " ~ padded_table ~ " │ " ~ padded_pipe ~ " │ " ~ padded_action ~ " │ " ~ padded_stage ~ " │ " ~ padded_cluster ~ " │ " ~ padded_pattern ~ " │ " ~ padded_format ~ " │", info=True) }}
+            {{ log("│ " ~ padded_event ~ " │ " ~ padded_table_status ~ " │ " ~ padded_pipe ~ " │ " ~ padded_action ~ " │ " ~ padded_stage ~ " │ " ~ padded_cluster ~ " │ " ~ padded_pattern ~ " │ " ~ padded_format ~ " │ " ~ padded_table_change ~ " │", info=True) }}
         {% endfor %}
         
         {# Enhanced footer #}
-        {{ log("└──────────────────────┴────────┴────────┴─────────────┴─────────┴─────────┴─────────┴─────────┘", info=True) }}
+        {{ log("└──────────────────────┴────────┴────────┴─────────────┴─────────┴─────────┴─────────┴─────────┴───────┘", info=True) }}
         {{ log("", info=True) }}
         {{ log("💡 Change Flags: Stage = Stage name change, Cluster = Cluster key change", info=True) }}
         {{ log("               Pattern = File pattern change, Format = File format change", info=True) }}
+        {{ log("               Table = Table structure/metadata changes", info=True) }}
         
         {# ============================ EXECUTION SUMMARY ============================ #}
         {% set end_time = modules.datetime.datetime.now() %}
@@ -196,9 +182,9 @@
         {{ log("📊 EXECUTION SUMMARY", info=True) }}
         
         {# Summary table header #}
-        {{ log("┌─────────────────────────────────┬──────────────────────────────────────┐", info=True) }}
+        {{ log("┌─────────────────────────────────┬────────────────────────────────────┐", info=True) }}
         {{ log("│ Metric                          │ Value                                │", info=True) }}
-        {{ log("├─────────────────────────────────┼──────────────────────────────────────┤", info=True) }}
+        {{ log("├─────────────────────────────────┼────────────────────────────────────┤", info=True) }}
         
         {# Summary data rows #}
         {% set summary_items = [
@@ -217,7 +203,7 @@
         {% endfor %}
         
         {# Summary table footer #}
-        {{ log("└─────────────────────────────────┴──────────────────────────────────────┘", info=True) }}
+        {{ log("└─────────────────────────────────┴────────────────────────────────────┘", info=True) }}
         
         {# Status messages #}
         {{ log("", info=True) }}
