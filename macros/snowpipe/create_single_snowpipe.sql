@@ -290,7 +290,6 @@
     {% else %}
         {% set action_type = 'skipped' %}
     {% endif %}
-    {% endif %}
     
     {# Execute if requested #}
     {% if run_queries %}
@@ -316,7 +315,6 @@
                 {{ log("No changes detected for " ~ full_pipe_name, info=True) }}
             {% endif %}
         {% endif %}
-    {% endif %}
     
     {{ return({
         'success': true, 
