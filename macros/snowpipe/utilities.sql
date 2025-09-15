@@ -147,20 +147,22 @@
 {% endmacro %}
 
 {% macro get_pipe_pause_state(schema_name, pipe_name) %}
+    {% set full_pipe_name = var("snowpipe_database") ~ "." ~ schema_name ~ "." ~ pipe_name %}
     {% set query %}
         SELECT 
-            CASE 
-                WHEN UPPER(definition) LIKE '%PIPE_EXECUTION_PAUSED%=%TRUE%' THEN TRUE
-                ELSE FALSE 
-            END as is_paused
-        FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
-        WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
-        AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
-        AND PIPE_NAME = UPPER('{{ pipe_name }}')
+            PARSE_JSON(SYSTEM$PIPE_STATUS('{{ full_pipe_name }}')):"executionState"::STRING as execution_state
     {% endset %}
-    {%- call statement('pause_check', fetch_result=True) %}{{ query }}{%- endcall -%}
-    {%- set result = load_result('pause_check')['data'] -%}
-    {{ return(result[0][0] if result|length > 0 else false) }}
+    {%- call statement('pipe_status_check', fetch_result=True) %}{{ query }}{%- endcall -%}
+    {%- set result = load_result('pipe_status_check')['data'] -%}
+    
+    {% if result|length > 0 and result[0][0] %}
+        {% set execution_state = result[0][0]|upper %}
+        {% set is_paused = execution_state == 'PAUSED' %}
+    {% else %}
+        {% set is_paused = false %}
+    {% endif %}
+    
+    {{ return(is_paused) }}
 {% endmacro %}
 
 -- =============================================================================
