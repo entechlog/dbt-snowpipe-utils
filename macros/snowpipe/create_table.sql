@@ -33,60 +33,47 @@
                 {{ log("Creating new table with inferred schema + metadata", info=True) }}
             {% endif %}
             
-            {# Get the appropriate file format clause for schema inference #}
+            {# INFER_SCHEMA always requires named file format - create defaults if needed #}
             {% set stage_name_only = stage_name.split('.')[-1] %}
-            {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
+            {% set stage_info = get_stage_file_format_info(stage_name_only) %}
             
-            {% if has_inline_format %}
-                {% set stage_format = get_stage_file_format(stage_name_only) %}
+            {% if stage_info.has_named_format %}
+                {# Use existing named format #}
                 CREATE TABLE {{ full_table_name }}
                 USING TEMPLATE (
                     SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
                     FROM TABLE(
                         INFER_SCHEMA(
                             LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
-                            FILE_FORMAT => '{{ stage_format }}'
+                            FILE_FORMAT => '{{ stage_info.format_name }}',
+                            IGNORE_CASE => TRUE
                         )
                     )
                 )
             {% else %}
-                {# Check if stage has a named format #}
-                {% set stage_info = get_stage_file_format_info(stage_name_only) %}
-                {% if stage_info.has_named_format %}
-                    CREATE TABLE {{ full_table_name }}
-                    USING TEMPLATE (
-                        SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
-                        FROM TABLE(
-                            INFER_SCHEMA(
-                                LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
-                                FILE_FORMAT => '{{ stage_info.format_name }}'
-                            )
-                        )
-                    )
+                {# Create default named file formats for inference #}
+                {% if file_pattern|lower == 'json' %}
+                    {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_JSON_FORMAT" %}
+                    CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'JSON';
+                {% elif file_pattern|lower == 'csv' %}
+                    {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_CSV_FORMAT" %}
+                    CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1;
                 {% else %}
-                    {# Create default named file formats for inference if they don't exist #}
-                    {% if file_pattern|lower == 'json' %}
-                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_JSON_FORMAT" %}
-                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'JSON';
-                    {% elif file_pattern|lower == 'csv' %}
-                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_CSV_FORMAT" %}
-                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1;
-                    {% else %}
-                        {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_PARQUET_FORMAT" %}
-                        CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'PARQUET';
-                    {% endif %}
-                    
-                    CREATE TABLE {{ full_table_name }}
-                    USING TEMPLATE (
-                        SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
-                        FROM TABLE(
-                            INFER_SCHEMA(
-                                LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
-                                FILE_FORMAT => '{{ default_format_name }}'
-                            )
+                    {% set default_format_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ ".DEFAULT_PARQUET_FORMAT" %}
+                    CREATE FILE FORMAT IF NOT EXISTS {{ default_format_name }} TYPE = 'PARQUET';
+                {% endif %}
+                
+                CREATE TABLE {{ full_table_name }}
+                USING TEMPLATE (
+                    SELECT ARRAY_AGG(OBJECT_CONSTRUCT(*))
+                    FROM TABLE(
+                        INFER_SCHEMA(
+                            LOCATION => '@{{ stage_name }}/{{ s3_dir_name }}',
+                            FILE_FORMAT => '{{ default_format_name }}',
+                            IGNORE_CASE => TRUE
                         )
                     )
-                {% endif %}
+                )
             {% endif %}
             {% if enable_schema_evolution %}
             ENABLE_SCHEMA_EVOLUTION = TRUE
@@ -166,23 +153,114 @@
             {{ log("Mode: VARIANT column", info=True) }}
         {% endif %}
         
-        -- Create or replace VARIANT table
-        CREATE OR REPLACE TABLE {{ full_table_name }}
-        {% if cluster_key and cluster_key|trim != "" %}
-        CLUSTER BY ("{{ cluster_key }}")
-        {% endif %}
-        (
-            FILE_NAME VARCHAR(16777216) COMMENT 'Source file name', 
-            FILE_ROW_NUMBER NUMBER(38,0) COMMENT 'Row number in source file',
-            FILE_CONTENT_KEY VARCHAR(16777216) COMMENT 'File content hash',
-            FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'File last modified time',
-            LOADED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'When record was loaded',
-            DATA VARIANT COMMENT 'Full record data in VARIANT format'
-            {% if cluster_key and cluster_key|trim != "" %}
-            ,"{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column'
+        {% if not table_exists %}
+            -- Create new VARIANT table (SAFE: only when table doesn't exist)
+            {% if debug_mode %}
+                {{ log("Creating new VARIANT table", info=True) }}
             {% endif %}
-        );
-        
+            CREATE TABLE {{ full_table_name }}
+            {% if cluster_key and cluster_key|trim != "" %}
+            CLUSTER BY ("{{ cluster_key }}")
+            {% endif %}
+            (
+                FILE_NAME VARCHAR(16777216) COMMENT 'Source file name', 
+                FILE_ROW_NUMBER NUMBER(38,0) COMMENT 'Row number in source file',
+                FILE_CONTENT_KEY VARCHAR(16777216) COMMENT 'File content hash',
+                FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'File last modified time',
+                LOADED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'When record was loaded',
+                DATA VARIANT COMMENT 'Full record data in VARIANT format'
+                {% if cluster_key and cluster_key|trim != "" %}
+                ,"{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column'
+                {% endif %}
+            );
+        {% else %}
+            -- Table exists - apply incremental changes safely
+            {% if debug_mode %}
+                {{ log("VARIANT table exists - applying safe incremental changes", info=True) }}
+            {% endif %}
+            
+            -- Check if DATA column exists (should for VARIANT mode)
+            {% set data_column_check_query %}
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+                AND TABLE_SCHEMA = UPPER('{{ source_name }}')
+                AND TABLE_NAME = UPPER('{{ table_name }}')
+                AND COLUMN_NAME = 'DATA'
+            {% endset %}
+            {%- call statement('data_column_check', fetch_result=True) %}{{ data_column_check_query }}{%- endcall -%}
+            {%- set has_data_column = load_result('data_column_check')['data'][0][0] > 0 -%}
+            
+            {% if not has_data_column %}
+                -- Add DATA column if missing (converting from individual columns to VARIANT)
+                ALTER TABLE {{ full_table_name }} ADD COLUMN DATA VARIANT COMMENT 'Full record data in VARIANT format';
+            {% endif %}
+            
+            -- Ensure metadata columns exist
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_NAME VARCHAR(16777216) COMMENT 'Source file name';
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_ROW_NUMBER NUMBER(38,0) COMMENT 'Row number in source file';
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_CONTENT_KEY VARCHAR(16777216) COMMENT 'File content hash';
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'File last modified time';
+            ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS LOADED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'When record was loaded';
+            
+            -- Handle cluster key column changes with rename detection
+            {% if cluster_key and cluster_key|trim != "" %}
+                -- Check if this is a rename scenario (old cluster key exists but name changed)
+                {% set current_cluster = get_table_cluster_key(source_name, table_name) %}
+                {% if current_cluster and current_cluster != ('LINEAR("' ~ cluster_key|upper ~ '")') %}
+                    -- Extract old cluster key name from LINEAR("OLD_NAME") format
+                    {% set old_cluster_key = current_cluster | replace('LINEAR("', '') | replace('")', '') %}
+                    
+                    -- Check if old cluster key column exists
+                    {% set old_column_check_query %}
+                        SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+                        AND TABLE_SCHEMA = UPPER('{{ source_name }}')
+                        AND TABLE_NAME = UPPER('{{ table_name }}')
+                        AND COLUMN_NAME = UPPER('{{ old_cluster_key }}')
+                    {% endset %}
+                    {%- call statement('old_cluster_column_check', fetch_result=True) %}{{ old_column_check_query }}{%- endcall -%}
+                    {%- set old_column_exists = load_result('old_cluster_column_check')['data'][0][0] > 0 -%}
+                    
+                    {% if old_column_exists %}
+                        -- Rename existing cluster key column
+                        {% if debug_mode %}
+                            {{ log("Renaming cluster key column from " ~ old_cluster_key ~ " to " ~ cluster_key, info=True) }}
+                        {% endif %}
+                        ALTER TABLE {{ full_table_name }} RENAME COLUMN "{{ old_cluster_key }}" TO "{{ cluster_key }}";
+                    {% else %}
+                        -- Old column doesn't exist, add new one
+                        {% if debug_mode %}
+                            {{ log("Adding new cluster key column: " ~ cluster_key, info=True) }}
+                        {% endif %}
+                        ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column';
+                    {% endif %}
+                {% else %}
+                    -- Normal case: add new cluster key column or column already exists with correct name
+                    {% if debug_mode %}
+                        {{ log("Ensuring cluster key column exists: " ~ cluster_key, info=True) }}
+                    {% endif %}
+                    ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column';
+                {% endif %}
+            {% endif %}
+            
+            -- Update clustering if changed
+            {% set current_cluster = get_table_cluster_key(source_name, table_name) %}
+            {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
+            
+            {% if current_cluster != expected_cluster %}
+                {% if cluster_key and cluster_key|trim != "" %}
+                    {% if debug_mode %}
+                        {{ log("Updating clustering to: " ~ cluster_key, info=True) }}
+                    {% endif %}
+                    ALTER TABLE {{ full_table_name }} CLUSTER BY ("{{ cluster_key }}");
+                {% else %}
+                    {% if debug_mode %}
+                        {{ log("Removing clustering", info=True) }}
+                    {% endif %}
+                    ALTER TABLE {{ full_table_name }} DROP CLUSTERING KEY;
+                {% endif %}
+            {% endif %}
+        {% endif %}
     {% endif %}
     
     -- Perform initial data load for new tables only
