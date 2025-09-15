@@ -6,8 +6,7 @@ Automated Snowflake Snowpipe management with schema inference and evolution supp
 
 ```mermaid
 graph TD
-    subgraph AWS [AWS - Pre-existing]
-        S3[Cloud Storage<br/>source=sales/event_name=orders/] 
+    S3[Cloud Storage<br/>source=sales/event_name=orders/] 
     
     subgraph SF [Snowflake - Pre-existing]
         STAGES[External Stages<br/>JSON/PARQUET/CSV]
@@ -77,8 +76,8 @@ Edit `seeds/reference__snowpipe_config.csv`:
 ```csv
 stage_name,source_name,event_name,event_type,cluster_key_transformation,cluster_key_type,cluster_key,file_pattern,enable_schema_inference,enable_schema_evolution,dev_enable_pipe_flag,dev_pause_pipe_flag,notes
 PARQUET_STAGE,SALES,ORDERS,,DATE(timestamp),DATE,event_date,parquet,FALSE,FALSE,TRUE,FALSE,VARIANT mode
-JSON_STAGE,SALES,CUSTOMERS,,DATE(created_at),DATE,event_date,json,TRUE,FALSE,TRUE,FALSE,Individual columns
-JSON_STAGE,MARKETING,CAMPAIGNS,,DATE(timestamp),DATE,event_date,json,TRUE,TRUE,TRUE,FALSE,With schema evolution
+,SALES,CUSTOMERS,,DATE(created_at),DATE,event_date,json,TRUE,FALSE,TRUE,FALSE,Individual columns
+,MARKETING,CAMPAIGNS,,DATE(timestamp),DATE,event_date,json,TRUE,TRUE,TRUE,FALSE,With schema evolution
 ```
 
 Load configuration:
