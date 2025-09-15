@@ -1,23 +1,5 @@
-{# Helper macro to get current pipe pause state #}
-{% macro get_pipe_pause_state(schema_name, pipe_name) %}
-    {% set query %}
-        SELECT 
-            CASE 
-                WHEN UPPER(definition) LIKE '%PIPE_EXECUTION_PAUSED%=%TRUE%' THEN TRUE
-                ELSE FALSE 
-            END as is_paused
-        FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
-        WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
-        AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
-        AND PIPE_NAME = UPPER('{{ pipe_name }}');
-    {% endset %}
-    {%- call statement('pause_check', fetch_result=True) %}{{ query }}{%- endcall -%}
-    {%- set result = load_result('pause_check')['data'] -%}
-    {{ return(result[0][0] if result|length > 0 else false) }}
-{% endmacro %}
-
 {% macro create_single_snowpipe(config, run_queries=False, debug_mode=False) %}
-    {# Extract configuration values - updated indices for new columns #}
+    {# Extract configuration values #}
     {% set stage_base = config[0] %}
     {% set source_name = config[1] %}
     {% set event_name = config[2] %}
@@ -65,27 +47,38 @@
     {% endif %}
     {% set full_stage_name = var("snowpipe_database") ~ "." ~ var("snowpipe_schema") ~ "." ~ stage_name %}
     
-    {# Debug mode logging #}
-    {% if debug_mode %}
-        {{ log("Processing " ~ full_pipe_name ~ " (Source: " ~ source_name ~ ", Pattern: " ~ file_pattern ~ ")", info=True) }}
-        
-        {# Log initial session context #}
-        {% set session_query %}
-            SELECT 
-                CURRENT_USER() as current_user,
-                CURRENT_ROLE() as current_role,
-                CURRENT_DATABASE() as current_database,
-                CURRENT_SCHEMA() as current_schema,
-                CURRENT_WAREHOUSE() as current_warehouse
-        {% endset %}
-        {%- call statement('initial_session_context', fetch_result=True) %}{{ session_query }}{%- endcall -%}
-        {%- set session_result = load_result('initial_session_context')['data'] -%}
-        {% if session_result|length > 0 %}
-            {{ log("Initial Session Context - User: " ~ session_result[0][0] ~ ", Role: " ~ session_result[0][1] ~ ", DB: " ~ session_result[0][2] ~ ", Schema: " ~ session_result[0][3] ~ ", WH: " ~ session_result[0][4], info=True) }}
-        {% endif %}
-    {% endif %}
+    {# Processing header - show for all runs #}
+    {{ log("", info=True) }}
+    {{ log("🔍 PROCESSING: " ~ full_pipe_name, info=True) }}
     
-    {# Check current state - but first switch to target database context #}
+    {# Configuration table - show for all runs with proper width and borders #}
+    {{ log("📋 CONFIGURATION:", info=True) }}
+    {{ log("┌──────────────────────┬──────────────────────────────────────────────────────────────────────┐", info=True) }}
+    {{ log("│ Parameter            │ Value                                                                │", info=True) }}
+    {{ log("├──────────────────────┼──────────────────────────────────────────────────────────────────────┤", info=True) }}
+    
+    {% set config_items = [
+        ('Source', source_name),
+        ('Event', event_name),
+        ('Event Type', event_type if event_type else 'None'),
+        ('File Pattern', file_pattern),
+        ('Stage', full_stage_name),
+        ('Schema Inference', 'ON' if enable_schema_inference else 'OFF'),
+        ('Schema Evolution', 'ON' if enable_schema_evolution else 'OFF'),
+        ('Table Mode', 'Individual Columns' if use_individual_columns else 'VARIANT'),
+        ('Cluster Key', cluster_key if cluster_key else 'None'),
+        ('Cluster Transform', cluster_key_transformation if cluster_key_transformation else 'None'),
+        ('Pause Flag', 'TRUE' if pause_pipe_flag else 'FALSE')
+    ] %}
+    
+    {% for param, value in config_items %}
+        {% set padded_param = (param ~ '                    ')[:20] %}
+        {% set padded_value = ((value | string) ~ '                                                                      ')[:68] %}
+        {{ log("│ " ~ padded_param ~ " │ " ~ padded_value ~ " │", info=True) }}
+    {% endfor %}
+    {{ log("└──────────────────────┴──────────────────────────────────────────────────────────────────────┘", info=True) }}
+    
+    {# Check current state - switch to target database context #}
     {% if execute %}
         {% set switch_context_sql %}
             USE DATABASE {{ var("snowpipe_database") }};
@@ -99,7 +92,7 @@
     {% set pipe_exists = check_pipe_exists(source_name, pipe_name) %}
     {% set table_exists = check_table_exists(source_name, table_name, debug_mode) %}
     
-    {# Get current states for summary #}
+    {# Get current states for comparison #}
     {% set current_cluster = '' %}
     {% set current_stage = '' %}
     {% set current_pattern = '' %}
@@ -117,7 +110,54 @@
         {% set current_paused = get_pipe_pause_state(source_name, pipe_name) %}
     {% endif %}
     
-    {# change detection logic #}
+    {# Prepare expected values for comparison #}
+    {% set expected_stage = full_stage_name|upper %}
+    {% set expected_pattern = get_file_pattern(file_pattern) %}
+    {% set expected_format = get_file_format_name_for_comparison(file_pattern, stage_name) %}
+    {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
+    
+    {# For individual columns mode, cluster transformation is not supported #}
+    {% if use_individual_columns %}
+        {% set expected_transformation = '' %}
+    {% else %}
+        {% set expected_transformation = cluster_key_transformation if (cluster_key and cluster_key_transformation) else '' %}
+    {% endif %}
+    
+    {% set current_transformation = '' %}
+    {% if pipe_exists and cluster_key and not use_individual_columns and cluster_key_transformation %}
+        {% set current_transformation = get_pipe_cluster_transformation(source_name, pipe_name, cluster_key) %}
+    {% endif %}
+    
+    {# Comparison table - expanded width for better visibility with increased column sizes #}
+    {{ log("", info=True) }}
+    {{ log("🔄 DETAILED COMPARISON:", info=True) }}
+    {{ log("┌─────────────────────┬──────────────────────────────────────────────────┬─────────────────────────────────────────────────┬─────┐", info=True) }}
+    {{ log("│ Parameter           │ Current Value                                    │ Expected Value                                  │Match│", info=True) }}
+    {{ log("├─────────────────────┼──────────────────────────────────────────────────┼─────────────────────────────────────────────────┼─────┤", info=True) }}
+    
+    {% set comparison_items = [
+        ('Table Exists', table_exists|string, 'TRUE', table_exists|string == 'True'),
+        ('Pipe Exists', pipe_exists|string, 'TRUE', pipe_exists|string == 'True'),
+        ('Stage', current_stage if current_stage else 'None', expected_stage if expected_stage else 'None', current_stage == expected_stage),
+        ('File Pattern', current_pattern if current_pattern else 'None', expected_pattern if expected_pattern else 'None', current_pattern == expected_pattern),
+        ('File Format', current_format if current_format else 'None', expected_format if expected_format else 'None', current_format == expected_format),
+        ('Cluster Key', current_cluster if current_cluster else 'None', expected_cluster if expected_cluster else 'None', current_cluster|trim|upper == expected_cluster|trim|upper),
+        ('Cluster Transform', current_transformation if current_transformation else 'None', expected_transformation if expected_transformation else 'None', current_transformation == expected_transformation),
+        ('Pause State', current_paused|string, pause_pipe_flag|string, current_paused == pause_pipe_flag)
+    ] %}
+    
+    {% for param, current, expected, match in comparison_items %}
+        {% set padded_param = (param ~ '                   ')[:19] %}
+        {% set padded_current = (current ~ '                                                  ')[:48] %}
+        {% set padded_expected = (expected ~ '                                                 ')[:47] %}
+        {% set match_text = 'YES' if match else 'NO' %}
+        {% set padded_match = (match_text ~ '   ')[:3] %}
+        
+        {{ log("│ " ~ padded_param ~ " │ " ~ padded_current ~ " │ " ~ padded_expected ~ " │ " ~ padded_match ~ " │", info=True) }}
+    {% endfor %}
+    {{ log("└─────────────────────┴──────────────────────────────────────────────────┴─────────────────────────────────────────────────┴─────┘", info=True) }}
+    
+    {# Change detection logic #}
     {% set requires_pipe_recreation = false %}
     {% set requires_table_creation = false %}
     {% set requires_pause_change = false %}
@@ -130,7 +170,7 @@
     {% set table_change_flag = false %}
     {% set pause_change_flag = false %}
     
-    {# 1. Check if table needs to be created or updated #}
+    {# Check if table needs to be created or updated #}
     {% if not table_exists %}
         {% set requires_table_creation = true %}
         {% set table_change_flag = true %}
@@ -152,80 +192,55 @@
             {% set requires_table_creation = true %}
             {% set table_change_flag = true %}
             {% do change_reasons.append("Missing metadata columns") %}
-            {% if debug_mode %}
-                {{ log("Table exists but missing metadata columns (" ~ metadata_columns_count ~ "/5 found)", info=True) }}
-            {% endif %}
         {% endif %}
     {% endif %}
     
-    {# 2. Check if pipe needs to be created or updated #}
+    {# Check if pipe needs to be created or updated #}
     {% if not pipe_exists %}
         {% set requires_pipe_recreation = true %}
         {% do change_reasons.append("Pipe missing") %}
     {% else %}
         {# Pipe exists - check for configuration changes #}
-        {% set expected_stage = full_stage_name|upper %}
         {% if current_stage != expected_stage %}
             {% set requires_pipe_recreation = true %}
             {% set stage_change_flag = true %}
             {% do change_reasons.append("Stage changed") %}
-            {% if debug_mode %}
-                {{ log("Stage change detected: '" ~ current_stage ~ "' -> '" ~ expected_stage ~ "'", info=True) }}
-            {% endif %}
         {% endif %}
         
-        {% set expected_pattern = get_file_pattern(file_pattern) %}
         {% if current_pattern != expected_pattern %}
             {% set requires_pipe_recreation = true %}
             {% set file_pattern_change_flag = true %}
             {% do change_reasons.append("File pattern changed") %}
-            {% if debug_mode %}
-                {{ log("File pattern change detected: '" ~ current_pattern ~ "' -> '" ~ expected_pattern ~ "'", info=True) }}
-            {% endif %}
         {% endif %}
         
-        {# File format changes detection #}
-        {% set expected_format = get_file_format_clause(file_pattern, stage_name) %}
-        {% if current_format and current_format != expected_format %}
+        {# File format changes detection - compare format names only #}
+        {% if expected_format and current_format != expected_format %}
             {% set requires_pipe_recreation = true %}
             {% set file_format_change_flag = true %}
             {% do change_reasons.append("File format changed") %}
-            {% if debug_mode %}
-                {{ log("File format change detected: '" ~ current_format ~ "' -> '" ~ expected_format ~ "'", info=True) }}
-            {% endif %}
         {% endif %}
         
-        {# Check clustering changes - this affects TABLE, not just pipe #}
-        {% set expected_cluster = ('LINEAR("' ~ cluster_key|upper ~ '")') if (cluster_key and cluster_key|trim != "") else '' %}
-        
-        {% if debug_mode %}
-            {{ log("Cluster comparison:", info=True) }}
-            {{ log("  Current:  '" ~ current_cluster|trim ~ "'", info=True) }}
-            {{ log("  Expected: '" ~ expected_cluster|trim ~ "'", info=True) }}
-            {{ log("  Match: " ~ (current_cluster|trim|upper == expected_cluster|trim|upper), info=True) }}
-        {% endif %}
-        
+        {# Check clustering changes - MODIFIED LOGIC FOR VARIANT MODE #}
         {% if current_cluster|trim|upper != expected_cluster|trim|upper %}
-            {% set requires_table_creation = true %}
-            {% set cluster_change_flag = true %}
-            {% set table_change_flag = true %}
-            {% do change_reasons.append("Clustering changed") %}
-            {% if debug_mode %}
-                {{ log("Clustering change detected - will recreate table", info=True) }}
+            {% if use_individual_columns %}
+                {# Individual columns mode: clustering changes require table recreation #}
+                {% set requires_table_creation = true %}
+                {% set cluster_change_flag = true %}
+                {% set table_change_flag = true %}
+                {% do change_reasons.append("Clustering changed") %}
+            {% else %}
+                {# VARIANT mode: clustering changes only require table modification, not recreation #}
+                {% set cluster_change_flag = true %}
+                {% set table_change_flag = true %}
+                {% do change_reasons.append("Clustering changed") %}
             {% endif %}
         {% endif %}
         
-        {# Check cluster transformation changes #}
-        {% if cluster_key and cluster_key|trim != "" and cluster_key_transformation and cluster_key_transformation|trim != "" %}
-            {% set current_transformation = get_pipe_cluster_transformation(source_name, pipe_name, cluster_key) %}
-            {% if current_transformation != cluster_key_transformation %}
-                {% set requires_pipe_recreation = true %}
-                {% set cluster_transformation_change_flag = true %}
-                {% do change_reasons.append("Cluster transformation changed") %}
-                {% if debug_mode %}
-                    {{ log("Cluster transformation change detected: '" ~ current_transformation ~ "' -> '" ~ cluster_key_transformation ~ "'", info=True) }}
-                {% endif %}
-            {% endif %}
+        {# Check cluster transformation changes - only for VARIANT mode #}
+        {% if not use_individual_columns and expected_transformation and current_transformation != expected_transformation %}
+            {% set requires_pipe_recreation = true %}
+            {% set cluster_transformation_change_flag = true %}
+            {% do change_reasons.append("Cluster transformation changed") %}
         {% endif %}
         
         {# Check pause state changes #}
@@ -233,31 +248,45 @@
             {% set requires_pause_change = true %}
             {% set pause_change_flag = true %}
             {% do change_reasons.append("Pause state changed") %}
-            {% if debug_mode %}
-                {{ log("Pause state change detected: " ~ current_paused ~ " -> " ~ pause_pipe_flag, info=True) }}
-            {% endif %}
         {% endif %}
     {% endif %}
     
-    {# Log all detected changes #}
+    {# Debug mode decision summary #}
     {% if debug_mode %}
-        {{ log("Change Detection Summary:", info=True) }}
-        {{ log("  stage_change_flag: " ~ stage_change_flag, info=True) }}
-        {{ log("  cluster_change_flag: " ~ cluster_change_flag, info=True) }}
-        {{ log("  cluster_transformation_change_flag: " ~ cluster_transformation_change_flag, info=True) }}
-        {{ log("  file_pattern_change_flag: " ~ file_pattern_change_flag, info=True) }}
-        {{ log("  file_format_change_flag: " ~ file_format_change_flag, info=True) }}
-        {{ log("  table_change_flag: " ~ table_change_flag, info=True) }}
-        {{ log("  pause_change_flag: " ~ pause_change_flag, info=True) }}
-        {{ log("  Total change reasons: " ~ change_reasons | join(", "), info=True) }}
+        {{ log("", info=True) }}
+        {{ log("⚡ CHANGE DECISION SUMMARY:", info=True) }}
+        {{ log("┌─────────────────────────┬─────────┐", info=True) }}
+        {{ log("│ Decision                │ Value   │", info=True) }}
+        {{ log("├─────────────────────────┼─────────┤", info=True) }}
+        
+        {% set decision_items = [
+            ('requires_table_creation', requires_table_creation|string),
+            ('requires_pipe_recreation', requires_pipe_recreation|string),
+            ('requires_pause_change', requires_pause_change|string),
+            ('change_reasons_count', change_reasons|length|string),
+            ('change_reasons', change_reasons|join(", ") if change_reasons else "None")
+        ] %}
+        
+        {% for decision, value in decision_items %}
+            {% if decision != 'change_reasons' %}
+                {% set padded_decision = (decision ~ '                       ')[:23] %}
+                {% set padded_value = (value ~ '       ')[:7] %}
+                {{ log("│ " ~ padded_decision ~ " │ " ~ padded_value ~ " │", info=True) }}
+            {% endif %}
+        {% endfor %}
+        {{ log("└─────────────────────────┴─────────┘", info=True) }}
+        
+        {% if change_reasons %}
+            {{ log("🔍 Change Reasons: " ~ change_reasons|join(", "), info=True) }}
+        {% endif %}
     {% endif %}
     
-    {# Determine if ANY changes are needed #}
-    {% set any_changes_needed = (requires_table_creation or requires_pipe_recreation or requires_pause_change) %}
+    {# Determine if any changes are needed #}
+    {% set any_changes_needed = (requires_table_creation or requires_pipe_recreation or requires_pause_change or cluster_change_flag) %}
     
     {# Generate SQL only when changes are actually needed #}
-    {% set creation_sql %}
-        {% if any_changes_needed %}
+    {% if any_changes_needed %}
+        {% set creation_sql %}
             USE ROLE {{ var("snowpipe_admin_role") }};
             USE DATABASE {{ var("snowpipe_database") }};
             USE SCHEMA {{ source_name }};
@@ -280,6 +309,15 @@
                     event_name,
                     cluster_key_transformation,
                     pipe_name,
+                    debug_mode
+                ) }}
+            {% elif cluster_change_flag %}
+                {# Handle cluster key changes without table recreation for VARIANT mode #}
+                {{ handle_cluster_key_change(
+                    full_table_name,
+                    current_cluster,
+                    cluster_key,
+                    cluster_key_type,
                     debug_mode
                 ) }}
             {% endif %}
@@ -310,11 +348,13 @@
                     SELECT SYSTEM$PIPE_FORCE_RESUME('{{ full_pipe_name }}');
                 {% endif %}
             {% endif %}
-        {% else %}
+        {% endset %}
+    {% else %}
+        {% set creation_sql %}
             -- {{ full_pipe_name }}: No changes required
             SELECT 'No changes required for {{ full_pipe_name }}' AS status;
-        {% endif %}
-    {% endset %}
+        {% endset %}
+    {% endif %}
     
     {# Determine action type #}
     {% set action_type = 'skipped' %}
@@ -324,32 +364,29 @@
         {% set action_type = 'updated' %}
     {% endif %}
     
-    {# Execute if requested #}
-    {% if run_queries %}
-        {% if any_changes_needed %}
-            {% if debug_mode %}
-                {{ log("Executing changes for " ~ full_pipe_name ~ ": " ~ change_reasons | join(", "), info=True) }}
-            {% endif %}
-        {% else %}
-            {% if debug_mode %}
-                {{ log("No changes needed for " ~ full_pipe_name, info=True) }}
-            {% endif %}
+    {# Execute SQL only when changes are needed #}
+    {% if run_queries and any_changes_needed %}
+        {% if debug_mode %}
+            {{ log("🚀 Executing changes for " ~ full_pipe_name ~ ": " ~ change_reasons | join(", "), info=True) }}
         {% endif %}
-        
         {% do run_query(creation_sql) %}
         {% if debug_mode %}
-            {{ log("Completed " ~ full_pipe_name ~ " - Status: " ~ action_type, info=True) }}
+            {{ log("✅ Completed " ~ full_pipe_name ~ " - Status: " ~ action_type, info=True) }}
         {% endif %}
-    {% else %}
+    {% elif run_queries and not any_changes_needed %}
+        {% if debug_mode %}
+            {{ log("⭐ No changes needed for " ~ full_pipe_name ~ " - SKIPPING ALL SQL EXECUTION", info=True) }}
+        {% endif %}
+    {% elif not run_queries %}
         {% if debug_mode %}
             {% if any_changes_needed %}
-                {{ log("Would execute changes for " ~ full_pipe_name ~ ": " ~ change_reasons | join(", "), info=True) }}
+                {{ log("📋 Would execute changes for " ~ full_pipe_name ~ ": " ~ change_reasons | join(", "), info=True) }}
             {% else %}
-                {{ log("No changes detected for " ~ full_pipe_name, info=True) }}
+                {{ log("⭐ No changes detected for " ~ full_pipe_name, info=True) }}
             {% endif %}
         {% endif %}
     {% endif %}
-    
+        
     {{ return({
         'success': true, 
         'action': action_type, 
@@ -365,4 +402,30 @@
         'table_change_flag': table_change_flag,
         'pause_change_flag': pause_change_flag
     }) }}
+{% endmacro %}
+
+{# Helper macro to handle cluster key changes without table recreation #}
+{% macro handle_cluster_key_change(full_table_name, current_cluster, cluster_key, cluster_key_type, debug_mode=False) %}
+    {% if current_cluster and current_cluster != ('LINEAR("' ~ cluster_key|upper ~ '")') %}
+        -- Extract old cluster key name from LINEAR("OLD_NAME") format
+        {% set old_cluster_key = current_cluster | replace('LINEAR("', '') | replace('")', '') %}
+        
+        {% if debug_mode %}
+            {{ log("Handling cluster key change from " ~ old_cluster_key ~ " to " ~ cluster_key, info=True) }}
+        {% endif %}
+        
+        -- Drop clustering first
+        ALTER TABLE {{ full_table_name }} DROP CLUSTERING KEY;
+        
+        -- Rename the column
+        ALTER TABLE {{ full_table_name }} RENAME COLUMN "{{ old_cluster_key }}" TO "{{ cluster_key }}";
+        
+        -- Re-establish clustering
+        ALTER TABLE {{ full_table_name }} CLUSTER BY ("{{ cluster_key }}");
+        
+    {% elif cluster_key and cluster_key|trim != "" %}
+        -- Add new cluster key column if it doesn't exist
+        ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column';
+        ALTER TABLE {{ full_table_name }} CLUSTER BY ("{{ cluster_key }}");
+    {% endif %}
 {% endmacro %}

@@ -1,12 +1,19 @@
 -- =============================================================================
+-- SNOWPIPE UTILITIES MACROS
+-- Comprehensive utilities for Snowpipe management including existence checks,
+-- state retrieval, file format handling, and validation functions
+-- =============================================================================
+
+-- =============================================================================
 -- EXISTENCE CHECK UTILITIES
 -- =============================================================================
+
 {% macro check_pipe_exists(schema_name, pipe_name) %}
     {% set query %}
         SELECT COUNT(*) FROM INFORMATION_SCHEMA.PIPES
         WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
         AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
-        AND PIPE_NAME = UPPER('{{ pipe_name }}');
+        AND PIPE_NAME = UPPER('{{ pipe_name }}')
     {% endset %}
     {%- call statement('pipe_check', fetch_result=True) %}{{ query }}{%- endcall -%}
     {% set result = load_result('pipe_check')['data'][0][0] > 0 %}
@@ -15,7 +22,6 @@
 
 {% macro check_table_exists(schema_name, table_name, debug_mode=False) %}
     {% if debug_mode %}
-        {# Log current session context #}
         {% set session_query %}
             SELECT 
                 CURRENT_USER() as current_user,
@@ -35,7 +41,7 @@
         SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
         AND TABLE_SCHEMA = UPPER('{{ schema_name }}')
-        AND TABLE_NAME = UPPER('{{ table_name }}');
+        AND TABLE_NAME = UPPER('{{ table_name }}')
     {% endset %}
     {% if debug_mode %}
         {{ log("Checking table existence: " ~ table_name ~ " in " ~ var("snowpipe_database") ~ "." ~ schema_name, info=True) }}
@@ -51,6 +57,7 @@
 -- =============================================================================
 -- CURRENT STATE RETRIEVAL UTILITIES
 -- =============================================================================
+
 {% macro get_pipe_stage(schema_name, pipe_name) %}
     {% set query %}
         SELECT 
@@ -63,7 +70,7 @@
         FROM INFORMATION_SCHEMA.PIPES
         WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
         AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
-        AND PIPE_NAME = UPPER('{{ pipe_name }}');
+        AND PIPE_NAME = UPPER('{{ pipe_name }}')
     {% endset %}
     {%- call statement('stage_check', fetch_result=True) %}{{ query }}{%- endcall -%}
     {%- set result = load_result('stage_check')['data'] -%}
@@ -80,7 +87,7 @@
         FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
         WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
         AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
-        AND PIPE_NAME = UPPER('{{ pipe_name }}');
+        AND PIPE_NAME = UPPER('{{ pipe_name }}')
     {% endset %}
     {%- call statement('pattern_check', fetch_result=True) %}{{ query }}{%- endcall -%}
     {%- set result = load_result('pattern_check')['data'] -%}
@@ -98,7 +105,7 @@
         FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
         WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
         AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
-        AND PIPE_NAME = UPPER('{{ pipe_name }}');
+        AND PIPE_NAME = UPPER('{{ pipe_name }}')
     {% endset %}
     {%- call statement('format_check', fetch_result=True) %}{{ query }}{%- endcall -%}
     {%- set result = load_result('format_check')['data'] -%}
@@ -111,7 +118,7 @@
         SELECT COALESCE(CLUSTERING_KEY, '') FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.TABLES
         WHERE TABLE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
         AND TABLE_SCHEMA = UPPER('{{ schema_name }}')
-        AND TABLE_NAME = UPPER('{{ table_name }}');
+        AND TABLE_NAME = UPPER('{{ table_name }}')
     {% endset %}
     {%- call statement('cluster_check', fetch_result=True) %}{{ query }}{%- endcall -%}
     {%- set result = load_result('cluster_check')['data'] -%}
@@ -119,7 +126,6 @@
     {{ return(cluster_result) }}
 {% endmacro %}
 
-{# Get current cluster transformation from pipe definition #}
 {% macro get_pipe_cluster_transformation(schema_name, pipe_name, cluster_key) %}
     {% set query %}
         SELECT COALESCE(
@@ -132,7 +138,7 @@
         FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
         WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
         AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
-        AND PIPE_NAME = UPPER('{{ pipe_name }}');
+        AND PIPE_NAME = UPPER('{{ pipe_name }}')
     {% endset %}
     {%- call statement('cluster_transformation_check', fetch_result=True) %}{{ query }}{%- endcall -%}
     {%- set result = load_result('cluster_transformation_check')['data'] -%}
@@ -140,12 +146,30 @@
     {{ return(transformation_result) }}
 {% endmacro %}
 
+{% macro get_pipe_pause_state(schema_name, pipe_name) %}
+    {% set query %}
+        SELECT 
+            CASE 
+                WHEN UPPER(definition) LIKE '%PIPE_EXECUTION_PAUSED%=%TRUE%' THEN TRUE
+                ELSE FALSE 
+            END as is_paused
+        FROM {{ var("snowpipe_database") }}.INFORMATION_SCHEMA.PIPES
+        WHERE PIPE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+        AND PIPE_SCHEMA = UPPER('{{ schema_name }}')
+        AND PIPE_NAME = UPPER('{{ pipe_name }}')
+    {% endset %}
+    {%- call statement('pause_check', fetch_result=True) %}{{ query }}{%- endcall -%}
+    {%- set result = load_result('pause_check')['data'] -%}
+    {{ return(result[0][0] if result|length > 0 else false) }}
+{% endmacro %}
+
 -- =============================================================================
--- STAGE FILE FORMAT DETECTION UTILITIES (using DESC STAGE)
+-- STAGE FILE FORMAT DETECTION UTILITIES
 -- =============================================================================
+
 {% macro get_stage_file_format_info(stage_name) %}
     {% set query %}
-        DESC STAGE {{ var("snowpipe_database") }}.{{ var("snowpipe_schema") }}.{{ stage_name }};
+        DESC STAGE {{ var("snowpipe_database") }}.{{ var("snowpipe_schema") }}.{{ stage_name }}
     {% endset %}
     {%- call statement('stage_desc_check', fetch_result=True) %}{{ query }}{%- endcall -%}
     {%- set result = load_result('stage_desc_check')['data'] -%}
@@ -179,7 +203,6 @@
     {% if stage_info.has_named_format %}
         {{ return(stage_info.format_name) }}
     {% elif stage_info.has_inline_format %}
-        {# Build inline format string from properties #}
         {% set format_parts = [] %}
         {% for prop, value in stage_info.inline_properties.items() %}
             {% if prop == 'TYPE' %}
@@ -207,6 +230,7 @@
 -- =============================================================================
 -- PATH AND FORMAT UTILITIES
 -- =============================================================================
+
 {% macro get_s3_dir_name(source_name, event_name, event_type) %}
     {% if event_type and event_type|trim != "" %}
         {% set s3_dir = 'source=' ~ source_name ~ '/event_name=' ~ event_name ~ '/event_type=' ~ event_type ~ '/' %}
@@ -217,10 +241,8 @@
 {% endmacro %}
 
 {% macro get_file_format_clause(file_pattern, stage_name) %}
-    {# Extract just the stage name from fully qualified name #}
     {% set stage_name_only = stage_name.split('.')[-1] %}
     
-    {# Check if stage exists before trying to describe it #}
     {% set stage_check_query %}
         SELECT COUNT(*) as stage_count
         FROM INFORMATION_SCHEMA.STAGES
@@ -233,7 +255,6 @@
     {% set stage_exists = (stage_result[0][0] > 0) if stage_result|length > 0 else false %}
     
     {% if not stage_exists %}
-        {# Stage doesn't exist, use default format based on pattern #}
         {% if file_pattern|lower == 'json' %}
             {{ return('FILE_FORMAT = (TYPE = \'JSON\')') }}
         {% elif file_pattern|lower == 'csv' %}
@@ -246,7 +267,6 @@
     {% set has_inline_format = check_stage_has_inline_format(stage_name_only) %}
     
     {% if has_inline_format %}
-        {# For stages with inline format, use simple TYPE based on file_pattern #}
         {% if file_pattern|lower == 'json' %}
             {{ return('FILE_FORMAT = (TYPE = \'JSON\')') }}
         {% elif file_pattern|lower == 'csv' %}
@@ -255,13 +275,10 @@
             {{ return('FILE_FORMAT = (TYPE = \'PARQUET\')') }}
         {% endif %}
     {% else %}
-        {# Check if stage has a named format #}
         {% set stage_info = get_stage_file_format_info(stage_name_only) %}
         {% if stage_info.has_named_format %}
-            {# Use the stage's named format #}
             {{ return('FILE_FORMAT = (FORMAT_NAME = \'' ~ stage_info.format_name ~ '\')') }}
         {% else %}
-            {# Use default format based on pattern #}
             {% if file_pattern|lower == 'json' %}
                 {{ return('FILE_FORMAT = (TYPE = \'JSON\')') }}
             {% elif file_pattern|lower == 'csv' %}
@@ -283,9 +300,36 @@
     {% endif %}
 {% endmacro %}
 
+{% macro get_file_format_name_for_comparison(file_pattern, stage_name) %}
+    {% set stage_name_only = stage_name.split('.')[-1] %}
+    
+    {% set stage_check_query %}
+        SELECT COUNT(*) as stage_count
+        FROM INFORMATION_SCHEMA.STAGES
+        WHERE STAGE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+        AND STAGE_SCHEMA = UPPER('{{ var("snowpipe_schema") }}')
+        AND STAGE_NAME = UPPER('{{ stage_name_only }}')
+    {% endset %}
+    {%- call statement('stage_existence_check_format_' ~ stage_name_only, fetch_result=True) %}{{ stage_check_query }}{%- endcall -%}
+    {%- set stage_result = load_result('stage_existence_check_format_' ~ stage_name_only)['data'] -%}
+    {% set stage_exists = (stage_result[0][0] > 0) if stage_result|length > 0 else false %}
+    
+    {% if not stage_exists %}
+        {{ return('') }}
+    {% endif %}
+    
+    {% set stage_info = get_stage_file_format_info(stage_name_only) %}
+    {% if stage_info.has_named_format %}
+        {{ return(stage_info.format_name) }}
+    {% else %}
+        {{ return('') }}
+    {% endif %}
+{% endmacro %}
+
 -- =============================================================================
 -- ENVIRONMENT UTILITIES
 -- =============================================================================
+
 {% macro get_environment_name() %}
     {% set env_code = env_var('ENV_CODE', 'dev')|lower %}
     {% if env_code in ['dev', 'development'] %}
@@ -302,10 +346,10 @@
 -- =============================================================================
 -- VALIDATION UTILITIES
 -- =============================================================================
+
 {% macro validate_config(config) %}
     {% set errors = [] %}
     
-    {# Updated indices for new config structure #}
     {% set source_name = config[1] %}
     {% set event_name = config[2] %}
     {% set file_pattern = config[7] %}
@@ -328,7 +372,6 @@
         {% do errors.append("file_pattern must be json, csv, or parquet") %}
     {% endif %}
     
-    {# Schema evolution validation #}
     {% if enable_schema_evolution and not enable_schema_inference %}
         {% do errors.append("enable_schema_evolution requires enable_schema_inference to be true") %}
     {% endif %}
@@ -339,10 +382,8 @@
 -- =============================================================================
 -- PERMISSIONS AND MANAGEMENT UTILITIES
 -- =============================================================================
+
 {% macro set_permissions_sql(pipe_name, table_name, pause_pipe_flag) %}
-    
-    -- Begin permissions and management section
-    
     -- Grant permissions to configurable roles
     {% set roles_string = var('snowpipe_monitor_roles', '') %}
     
@@ -361,7 +402,4 @@
     {% else %}
         SELECT SYSTEM$PIPE_FORCE_RESUME('{{ pipe_name }}');
     {% endif %}
-    
-    -- End of permissions section
-    
 {% endmacro %}

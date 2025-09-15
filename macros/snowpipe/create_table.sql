@@ -202,9 +202,45 @@
             ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS FILE_LAST_MODIFIED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'File last modified time';
             ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS LOADED_TIMESTAMP TIMESTAMP_NTZ(9) COMMENT 'When record was loaded';
             
-            -- Handle cluster key column
+            -- Handle cluster key column changes with rename detection
             {% if cluster_key and cluster_key|trim != "" %}
-                ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column';
+                -- Check if this is a rename scenario (old cluster key exists but name changed)
+                {% set current_cluster = get_table_cluster_key(source_name, table_name) %}
+                {% if current_cluster and current_cluster != ('LINEAR("' ~ cluster_key|upper ~ '")') %}
+                    -- Extract old cluster key name from LINEAR("OLD_NAME") format
+                    {% set old_cluster_key = current_cluster | replace('LINEAR("', '') | replace('")', '') %}
+                    
+                    -- Check if old cluster key column exists
+                    {% set old_column_check_query %}
+                        SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_CATALOG = UPPER('{{ var("snowpipe_database") }}')
+                        AND TABLE_SCHEMA = UPPER('{{ source_name }}')
+                        AND TABLE_NAME = UPPER('{{ table_name }}')
+                        AND COLUMN_NAME = UPPER('{{ old_cluster_key }}')
+                    {% endset %}
+                    {%- call statement('old_cluster_column_check', fetch_result=True) %}{{ old_column_check_query }}{%- endcall -%}
+                    {%- set old_column_exists = load_result('old_cluster_column_check')['data'][0][0] > 0 -%}
+                    
+                    {% if old_column_exists %}
+                        -- Rename existing cluster key column
+                        {% if debug_mode %}
+                            {{ log("Renaming cluster key column from " ~ old_cluster_key ~ " to " ~ cluster_key, info=True) }}
+                        {% endif %}
+                        ALTER TABLE {{ full_table_name }} RENAME COLUMN "{{ old_cluster_key }}" TO "{{ cluster_key }}";
+                    {% else %}
+                        -- Old column doesn't exist, add new one
+                        {% if debug_mode %}
+                            {{ log("Adding new cluster key column: " ~ cluster_key, info=True) }}
+                        {% endif %}
+                        ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column';
+                    {% endif %}
+                {% else %}
+                    -- Normal case: add new cluster key column or column already exists with correct name
+                    {% if debug_mode %}
+                        {{ log("Ensuring cluster key column exists: " ~ cluster_key, info=True) }}
+                    {% endif %}
+                    ALTER TABLE {{ full_table_name }} ADD COLUMN IF NOT EXISTS "{{ cluster_key }}" {{ cluster_key_type }} COMMENT 'Clustering key column';
+                {% endif %}
             {% endif %}
             
             -- Update clustering if changed
