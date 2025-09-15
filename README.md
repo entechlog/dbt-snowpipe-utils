@@ -6,7 +6,8 @@ Automated Snowflake Snowpipe management with schema inference and evolution supp
 
 ```mermaid
 graph TD
-    S3[Cloud Storage<br/>source=sales/event_name=orders/] 
+    subgraph AWS [AWS - Pre-existing]
+        S3[Cloud Storage<br/>source=sales/event_name=orders/] 
     
     subgraph SF [Snowflake - Pre-existing]
         STAGES[External Stages<br/>JSON/PARQUET/CSV]
@@ -180,14 +181,3 @@ SELECT * FROM TABLE(INFER_SCHEMA(
     FILE_FORMAT => 'JSON_FORMAT'
 ));
 ```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SNOWPIPE_DATABASE` | `RAW_DB` | Target database |
-| `SNOWPIPE_SCHEMA` | `UTIL` | Stages schema |
-| `SNOWPIPE_WAREHOUSE` | `COMPUTE_WH` | Compute warehouse |
-| `SNOWPIPE_ADMIN_ROLE` | `SYSADMIN` | Admin role |
-| `SNOWPIPE_MONITOR_ROLES` | `SYSADMIN` | Monitor roles (comma-separated) |
-| `ENV_CODE` | `dev` | Environment code |
